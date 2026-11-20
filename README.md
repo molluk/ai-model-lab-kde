@@ -79,3 +79,7 @@ See [SECURITY.md](SECURITY.md) and [HISTORY_PROVENANCE.md](HISTORY_PROVENANCE.md
 The tagged Git history v1.0–v3.7 was **reconstructed from release ZIPs**, not recovered from the original development commits. It records verifiable release changes, with sanitized example configurations. See [CHANGELOG.md](CHANGELOG.md).
 
 Maintainer: [@molluk](https://github.com/molluk). **All commits and tags in this reconstructed public history use PolyForm Noncommercial 1.0.0.** Earlier separately circulated ZIP archives may have different licensing; that is not retroactively changed. Preserve the applicable copyright and license notices when redistributing. See [LICENSE](LICENSE) and [LICENSING_GUIDE.md](LICENSING_GUIDE.md).
+
+## Localization (v3.8)
+The toolbar now includes a Russian/English selector. UI catalogs are stored
+in `locales/`. The selected language is saved in user `settings.json`.

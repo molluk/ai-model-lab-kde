@@ -63,7 +63,7 @@ def model_by_id(alias):
 
 
 def model_root():
-    return Path(os.environ.get('AI_LAB_MODEL_ROOT', config().get('model_root', '/home/USER/AI/models'))).expanduser()
+    return Path(os.environ.get('AI_LAB_MODEL_ROOT', config().get('model_root', '/mnt/Games/AI/Censored'))).expanduser()
 
 
 def resolve_gguf(profile):
@@ -303,7 +303,7 @@ def office_start():
 
 def comfy_path():
     chosen = Path(settings().get('comfy_dir','~/AI/ComfyUI')).expanduser()
-    for d in (chosen, HOME/'AI/ComfyUI', Path('/home/USER/AI/models/Comfyui'), Path('/home/USER/AI/models/ComfyUI')):
+    for d in (chosen, HOME/'AI/ComfyUI', Path('/mnt/Games/AI/Censored/Comfyui'), Path('/mnt/Games/AI/Censored/ComfyUI')):
         if (d/'main.py').is_file(): return d
     raise FileNotFoundError('ComfyUI main.py не найден; укажи директорию в настройках')
 

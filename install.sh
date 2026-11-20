@@ -12,14 +12,14 @@ mkdir -p "$DEST" "$HOME/.local/bin" "$HOME/.local/share/applications"
 if [[ -f "$DEST/gui.py" ]]; then
   BACKUP="$DEST/data/backups/release-$(date +%Y%m%d_%H%M%S)"
   mkdir -p "$BACKUP"
-  for f in core.py multi.py gui.py bench.py client_launcher.py run.sh install.sh; do
+  for f in core.py multi.py gui.py bench.py client_launcher.py i18n.py run.sh install.sh; do
     if [[ -f "$DEST/$f" ]]; then cp -p "$DEST/$f" "$BACKUP/$f"; fi
   done
   printf 'Резервная копия прежнего кода: %s\n' "$BACKUP"
 fi
 
 # Preserve existing profiles and reports when upgrading.
-for name in core.py multi.py gui.py bench.py client_launcher.py release_preflight.py run.sh README_RU.md; do
+for name in core.py multi.py gui.py bench.py client_launcher.py i18n.py release_preflight.py run.sh README_RU.md; do
   install -m 0644 "$SOURCE/$name" "$DEST/$name"
 done
 install -m 0755 "$SOURCE/install.sh" "$DEST/install.sh"
@@ -32,8 +32,9 @@ for name in models.json settings.json; do
     fi
   fi
 done
-mkdir -p "$DEST/benchmarks/prompts" "$DEST/benchmarks/extensions" "$DEST/tests" "$DEST/assets"
+mkdir -p "$DEST/benchmarks/prompts" "$DEST/benchmarks/extensions" "$DEST/tests" "$DEST/assets" "$DEST/locales"
 install -m 0644 "$SOURCE/benchmarks/README.md" "$DEST/benchmarks/README.md"
+if compgen -G "$SOURCE/locales/*.json" >/dev/null; then install -m 0644 "$SOURCE/locales/"*.json "$DEST/locales/"; fi
 if compgen -G "$SOURCE/benchmarks/prompts/*.md" >/dev/null; then
   install -m 0644 "$SOURCE/benchmarks/prompts/"*.md "$DEST/benchmarks/prompts/"
 fi

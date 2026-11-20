@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.7 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE v3.8 — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
@@ -31,12 +31,13 @@ except ImportError:
             QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle, QToolButton
         )
     except ImportError:
-        print('Нужен Qt6 Python. В CachyOS: sudo pacman -S pyside6', file=sys.stderr)
+        print('Qt6 Python required. On CachyOS/Arch run: sudo pacman -S pyside6', file=sys.stderr)
         raise SystemExit(2)
 
 import core
 import multi
 import client_launcher
+from i18n import T, set_language, get_language, available_languages
 
 COLORS = {
     'bg': '#111723', 'surface': '#1a2333', 'panel': '#222d40', 'line': '#33445d', 'text': '#e9f0fb',
@@ -165,6 +166,7 @@ class Window(QMainWindow):
         core.prepare()
         self.cfg = core.config()
         self.settings_data = core.settings()
+        set_language(self.settings_data.get("language", "ru"))
         self.jobs = []
         self.proc = None
         self.model_action_busy = False
@@ -185,7 +187,7 @@ class Window(QMainWindow):
         self.last_log_path = None
         self.last_log_text = ''
 
-        self.setWindowTitle('AI Model Lab — KDE · локальная лаборатория')
+        self.setWindowTitle(T('AI Model Lab — KDE · локальная лаборатория'))
         self.resize(1320, 900)
         self.setMinimumSize(980, 680)
         self.setStyleSheet(STYLE)
@@ -201,12 +203,20 @@ class Window(QMainWindow):
         h = QLabel('AI Model Lab')
         h.setObjectName('Header')
         titles.addWidget(h)
-        t = QLabel('Модели · отдельные сервисы · тесты · GPU и история')
+        t = QLabel(T('Модели · отдельные сервисы · тесты · GPU и история'))
         t.setObjectName('Subheader')
         titles.addWidget(t)
         header.addLayout(titles)
         header.addStretch()
-        header.addWidget(btn('↻ Обновить', self.refresh_status))
+        self.language_combo = QComboBox()
+        self.language_combo.setToolTip(T('Язык интерфейса'))
+        for code, display in available_languages():
+            self.language_combo.addItem(display, code)
+        idx = self.language_combo.findData(get_language())
+        self.language_combo.setCurrentIndex(max(idx, 0))
+        self.language_combo.currentIndexChanged.connect(self.switch_language)
+        header.addWidget(self.language_combo)
+        header.addWidget(btn(T('↻ Обновить'), self.refresh_status))
         layout.addLayout(header)
 
         # A fixed minimum-content width prevents four plots and per-GPU telemetry
@@ -225,10 +235,10 @@ class Window(QMainWindow):
         self.graph_gpu = Sparkline('GPU', '%', 100)
         self.graph_vram = Sparkline('VRAM', 'GiB', 22)
         self.graph_ram = Sparkline('RAM', 'GiB', 64)
-        self.graph_speed = Sparkline('Скорость · история', 'tok/s')
+        self.graph_speed = Sparkline(T('Скорость · история'), 'tok/s')
         for g in (self.graph_gpu, self.graph_vram, self.graph_ram, self.graph_speed):
             metrics.addWidget(g, 1)
-        self.metrics_label = QLabel('Нет данных GPU')
+        self.metrics_label = QLabel(T('Нет данных GPU'))
         self.metrics_label.setWordWrap(True)
         self.metrics_label.setMinimumWidth(240)
         metrics.addWidget(self.metrics_label, 1)
@@ -238,17 +248,17 @@ class Window(QMainWindow):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         self.tab_models = self.build_models()
-        self.tabs.addTab(self.tab_models, '🧠 Модели')
+        self.tabs.addTab(self.tab_models, T('🧠 Модели'))
         self.tab_services = self.build_services()
-        self.tabs.addTab(self.tab_services, '⚙ Управление')
+        self.tabs.addTab(self.tab_services, T('⚙ Управление'))
         self.tab_tests = self.build_tests()
-        self.tabs.addTab(self.tab_tests, '🧪 Тесты')
+        self.tabs.addTab(self.tab_tests, T('🧪 Тесты'))
         self.tab_results = self.build_results()
-        self.tabs.addTab(self.tab_results, '📊 Отчёты')
+        self.tabs.addTab(self.tab_results, T('📊 Отчёты'))
         self.tab_settings = self.build_settings()
-        self.tabs.addTab(self.tab_settings, '🔧 Настройки')
+        self.tabs.addTab(self.tab_settings, T('🔧 Настройки'))
 
-        self.message = QLabel('Готово. Все новые отчёты: ' + str(core.REPORTS))
+        self.message = QLabel(T('Готово. Все новые отчёты: ') + str(core.REPORTS))
         self.message.setObjectName('Subheader')
         layout.addWidget(self.message)
 
@@ -261,6 +271,50 @@ class Window(QMainWindow):
         self.refresh_reports()
         self.refresh_status()
 
+
+    def switch_language(self, _index):
+        """Persist locale and rebuild widgets. Detached model servers are unaffected."""
+        language = self.language_combo.currentData()
+        if not language or language == get_language():
+            return
+        running_benchmark = self.proc and self.proc.state() != QProcess.ProcessState.NotRunning
+        if running_benchmark or any(job.isRunning() for job in self.jobs):
+            QMessageBox.information(self, T('Смена языка'),
+                T('Сначала заверши текущий тест или операцию запуска/остановки.'))
+            self.language_combo.blockSignals(True)
+            self.language_combo.setCurrentIndex(self.language_combo.findData(get_language()))
+            self.language_combo.blockSignals(False)
+            return
+        if self.editor_dirty and not self.confirm_discard_or_save():
+            self.language_combo.blockSignals(True)
+            self.language_combo.setCurrentIndex(self.language_combo.findData(get_language()))
+            self.language_combo.blockSignals(False)
+            return
+        state = core.settings()
+        state['language'] = language
+        core.atomic_json(core.SETTINGS, state)
+        self.settings_data = state
+        set_language(language)
+        old_tab = self.tabs.currentIndex()
+        alias = self.selected_alias()
+        old_geometry = self.geometry()
+        new_window = Window()
+        new_window.setGeometry(old_geometry)
+        if alias:
+            new_window.select_tree_alias(new_window.tree, alias)
+            new_window.select_tree_alias(new_window.settings_tree, alias)
+        new_window.tabs.setCurrentIndex(old_tab)
+        app = QApplication.instance()
+        app._ai_lab_window = new_window
+        new_window.show()
+        self.exit_requested = True
+        # Closing a Qt window normally hides it without destroying its timers.
+        for timer_name in ('timer', 'log_timer', 'auto_timer', 'column_timer'):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                timer.stop()
+        self.close()
+        self.deleteLater()
 
     def protected_log_paths(self):
         paths = []
@@ -277,20 +331,20 @@ class Window(QMainWindow):
         reports_days = int(self.settings_data.get('reports_retention_days', 90) or 0)
         stats = core.cleanup_artifacts(logs_days, reports_days, self.protected_log_paths())
         if not startup and (stats['logs_deleted'] or stats['report_dirs_deleted'] or stats['errors']):
-            msg = f"Удалено логов: {stats['logs_deleted']}; отчётов: {stats['report_dirs_deleted']}"
+            msg = T(f"Удалено логов: {stats['logs_deleted']}; отчётов: {stats['report_dirs_deleted']}")
             if stats['errors']:
-                msg += "\nОшибки: " + '; '.join(stats['errors'][:4])
-            QMessageBox.information(self, 'Очистка', msg)
+                msg += T("\nОшибки: ") + '; '.join(stats['errors'][:4])
+            QMessageBox.information(self, T('Очистка'), msg)
         return stats
 
     def cleanup_old_artifacts(self):
         if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
-            QMessageBox.information(self, 'Очистка', 'Сначала останови запущенный тест, чтобы не трогать формируемый отчёт.')
+            QMessageBox.information(self, T('Очистка'), T('Сначала останови запущенный тест, чтобы не трогать формируемый отчёт.'))
             return
         logs_days = int(self.logs_retention.value()) if hasattr(self, 'logs_retention') else int(self.settings_data.get('logs_retention_days', 30) or 0)
         reports_days = int(self.reports_retention.value()) if hasattr(self, 'reports_retention') else int(self.settings_data.get('reports_retention_days', 90) or 0)
-        question = f'Удалить артефакты старше указанного срока?\nЛоги: {logs_days} дн.\nОтчёты: {reports_days} дн.\nЖурналы активных моделей сохранятся.'
-        if QMessageBox.question(self, 'Очистка логов и отчётов', question) != QMessageBox.StandardButton.Yes:
+        question = T(f'Удалить артефакты старше указанного срока?\nЛоги: {logs_days} дн.\nОтчёты: {reports_days} дн.\nЖурналы активных моделей сохранятся.')
+        if QMessageBox.question(self, T('Очистка логов и отчётов'), question) != QMessageBox.StandardButton.Yes:
             return
         self.settings_data['logs_retention_days'] = logs_days
         self.settings_data['reports_retention_days'] = reports_days
@@ -298,10 +352,10 @@ class Window(QMainWindow):
         stats = self.apply_retention_cleanup(startup=False)
         self.refresh_reports()
         self.refresh_status()
-        self.set_message(f"Очистка завершена: логов {stats['logs_deleted']}, отчётов {stats['report_dirs_deleted']}")
+        self.set_message(T(f"Очистка завершена: логов {stats['logs_deleted']}, отчётов {stats['report_dirs_deleted']}"))
 
     def clear_all_logs(self):
-        if QMessageBox.question(self, 'Очистить все логи', 'Удалить ВСЕ старые логи AI Model Lab, кроме журналов активных процессов?') != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, T('Очистить все логи'), T('Удалить ВСЕ старые логи AI Model Lab, кроме журналов активных процессов?')) != QMessageBox.StandardButton.Yes:
             return
         stats = core.cleanup_artifacts(0, 0, [])
         protected = {str(Path(p).resolve()) for p in self.protected_log_paths() if p}
@@ -314,14 +368,14 @@ class Window(QMainWindow):
                 deleted += 1
             except OSError:
                 pass
-        self.set_message(f'Удалено логов: {deleted}')
-        QMessageBox.information(self, 'Логи', f'Удалено логов: {deleted}. Журналы активных моделей сохранены.')
+        self.set_message(T(f'Удалено логов: {deleted}'))
+        QMessageBox.information(self, T('Логи'), T(f'Удалено логов: {deleted}. Журналы активных моделей сохранены.'))
 
     def clear_all_reports(self):
         if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
-            QMessageBox.information(self, 'Очистка отчётов', 'Сначала останови запущенный тест, чтобы не повредить формируемый отчёт.')
+            QMessageBox.information(self, T('Очистка отчётов'), T('Сначала останови запущенный тест, чтобы не повредить формируемый отчёт.'))
             return
-        if QMessageBox.question(self, 'Очистить все отчёты', 'Удалить ВСЕ папки отчётов из AI Model Lab?') != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, T('Очистить все отчёты'), T('Удалить ВСЕ папки отчётов из AI Model Lab?')) != QMessageBox.StandardButton.Yes:
             return
         deleted = 0
         for summary in list(core.REPORTS.glob('*/summary.json')):
@@ -332,8 +386,8 @@ class Window(QMainWindow):
             except OSError:
                 pass
         self.refresh_reports()
-        self.set_message(f'Удалено отчётов: {deleted}')
-        QMessageBox.information(self, 'Отчёты', f'Удалено папок отчётов: {deleted}')
+        self.set_message(T(f'Удалено отчётов: {deleted}'))
+        QMessageBox.information(self, T('Отчёты'), T(f'Удалено папок отчётов: {deleted}'))
 
     # ---------- Shared helpers ----------
     def set_message(self, text):
@@ -353,7 +407,7 @@ class Window(QMainWindow):
             self.refresh_status()
 
         def fail(err):
-            self.set_message('Ошибка: ' + err)
+            self.set_message(T('Ошибка: ') + err)
             self.append_log('❌ ' + description + '\n' + err)
             QMessageBox.warning(self, 'AI Model Lab', err)
             if after:
@@ -369,7 +423,7 @@ class Window(QMainWindow):
         job.start()
 
     def confirm_action(self, message, fn, after=None):
-        if QMessageBox.question(self, 'Подтверждение', message + '\nАктивные тесты могут быть прерваны.') == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, T('Подтверждение'), message + T('\nАктивные тесты могут быть прерваны.')) == QMessageBox.StandardButton.Yes:
             self.async_call(message, fn, after=after)
 
     def selected_alias(self):
@@ -392,18 +446,18 @@ class Window(QMainWindow):
         }
         name, command, url = commands.get(client, (client, '', ''))
         msg = QMessageBox(self)
-        msg.setWindowTitle(f'Установка {name}')
+        msg.setWindowTitle(T(f'Установка {name}'))
         msg.setIcon(QMessageBox.Icon.Information)
-        msg.setText(f'Клиент {name} не найден в PATH приложения.')
+        msg.setText(T(f'Клиент {name} не найден в PATH приложения.'))
         msg.setInformativeText(
-            f'Установка через Node.js/npm:\n{command}\n\n'
+            T(f'Установка через Node.js/npm:\n{command}\n\n'
             f'Документация: {url}\n\n'
             'Если приложение уже установлено, проверь путь к исполняемому файлу '
-            'и переменную PATH среды KDE. Для запуска клиента сервер модели должен работать.'
+            'и переменную PATH среды KDE. Для запуска клиента сервер модели должен работать.')
         )
-        copy_cmd = msg.addButton('Копировать команду', QMessageBox.ButtonRole.ActionRole)
-        docs = msg.addButton('Открыть документацию', QMessageBox.ButtonRole.ActionRole)
-        msg.addButton('Закрыть', QMessageBox.ButtonRole.RejectRole)
+        copy_cmd = msg.addButton(T('Копировать команду'), QMessageBox.ButtonRole.ActionRole)
+        docs = msg.addButton(T('Открыть документацию'), QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(T('Закрыть'), QMessageBox.ButtonRole.RejectRole)
         msg.exec()
         if msg.clickedButton() is copy_cmd:
             QApplication.clipboard().setText(command)
@@ -415,16 +469,16 @@ class Window(QMainWindow):
             self.open_url('http://127.0.0.1:3000')
             return
         msg = QMessageBox(self)
-        msg.setWindowTitle('Open WebUI не запущен')
-        msg.setText('Open WebUI не отвечает на 127.0.0.1:3000.')
+        msg.setWindowTitle(T('Open WebUI не запущен'))
+        msg.setText(T('Open WebUI не отвечает на 127.0.0.1:3000.'))
         msg.setInformativeText(
-            'Если сервис установлен, запусти его на вкладке «Управление» '
+            T('Если сервис установлен, запусти его на вкладке «Управление» '
             'или через systemctl --user start open-webui.service.\n'
-            'Если не установлен, см. https://docs.openwebui.com/getting-started/quick-start/.'
+            'Если не установлен, см. https://docs.openwebui.com/getting-started/quick-start/.')
         )
-        start = msg.addButton('Перейти к управлению', QMessageBox.ButtonRole.ActionRole)
-        docs = msg.addButton('Документация', QMessageBox.ButtonRole.ActionRole)
-        msg.addButton('Закрыть', QMessageBox.ButtonRole.RejectRole)
+        start = msg.addButton(T('Перейти к управлению'), QMessageBox.ButtonRole.ActionRole)
+        docs = msg.addButton(T('Документация'), QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(T('Закрыть'), QMessageBox.ButtonRole.RejectRole)
         msg.exec()
         if msg.clickedButton() is start:
             self.tabs.setCurrentIndex(1)
@@ -441,17 +495,17 @@ class Window(QMainWindow):
         directory = core.office_path()
         is_installed = (directory / 'run.py').is_file()
         msg = QMessageBox(self)
-        msg.setWindowTitle('Agent Office недоступен')
-        msg.setText('Agent Office не запущен или его адрес не определён.' if is_installed else 'Agent Office не установлен по указанному пути.')
+        msg.setWindowTitle(T('Agent Office недоступен'))
+        msg.setText(T('Agent Office не запущен или его адрес не определён.') if is_installed else T('Agent Office не установлен по указанному пути.'))
         msg.setInformativeText(
-            f'Проверяемый каталог: {directory}\n'
-            + ('Открой вкладку «Управление» и запусти Agent Office. При необходимости укажи office_url в настройках.'
+            T(f'Проверяемый каталог: {directory}\n')
+            + (T('Открой вкладку «Управление» и запусти Agent Office. При необходимости укажи office_url в настройках.')
                if is_installed else
-               'Укажи правильный каталог на вкладке «Настройки». Исходный проект: https://github.com/NosytLabs/agent-office')
+               T('Укажи правильный каталог на вкладке «Настройки». Исходный проект: https://github.com/NosytLabs/agent-office'))
         )
-        manage = msg.addButton('Открыть управление', QMessageBox.ButtonRole.ActionRole)
-        docs = msg.addButton('Открыть GitHub', QMessageBox.ButtonRole.ActionRole)
-        msg.addButton('Закрыть', QMessageBox.ButtonRole.RejectRole)
+        manage = msg.addButton(T('Открыть управление'), QMessageBox.ButtonRole.ActionRole)
+        docs = msg.addButton(T('Открыть GitHub'), QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(T('Закрыть'), QMessageBox.ButtonRole.RejectRole)
         msg.exec()
         if msg.clickedButton() is manage:
             self.tabs.setCurrentIndex(1)
@@ -465,9 +519,9 @@ class Window(QMainWindow):
         try:
             info = client_launcher.effective_instance(alias)
             QApplication.clipboard().setText(info['url'])
-            self.set_message('API скопирован: ' + info['url'])
+            self.set_message(T('API скопирован: ') + info['url'])
         except Exception as exc:
-            QMessageBox.warning(self, 'API модели', str(exc))
+            QMessageBox.warning(self, T('API модели'), str(exc))
 
     def open_preferred_client(self):
         if hasattr(self, 'client_combo'):
@@ -493,9 +547,9 @@ class Window(QMainWindow):
         client = self.client_combo.currentData()
         try:
             client_launcher.find_executable(client)
-            description = f'{client.capitalize()} найден. Выбор клиента сохраняется сразу и не запускает модель.'
+            description = T(f'{client.capitalize()} найден. Выбор клиента сохраняется сразу и не запускает модель.')
         except (FileNotFoundError, ValueError):
-            description = f'{client.capitalize()} пока не найден. Выбор сохранится; установка — кнопка «?». '
+            description = T(f'{client.capitalize()} пока не найден. Выбор сохранится; установка — кнопка «?». ')
         self.client_hint.setText(description)
 
     def on_client_preference_changed(self, _index):
@@ -512,7 +566,7 @@ class Window(QMainWindow):
             updated = core.update_model_client_preference(alias, client)
             self.cfg = updated
         except Exception as exc:
-            QMessageBox.warning(self, 'Не удалось сохранить клиент', str(exc))
+            QMessageBox.warning(self, T('Не удалось сохранить клиент'), str(exc))
             self.refresh_preferred_client_button()
             return
         # Keep the open editor in sync without losing unsaved changes to other fields.
@@ -525,9 +579,9 @@ class Window(QMainWindow):
                 editor_choice.blockSignals(False)
         self.update_client_hint()
         self.model_info.setPlainText(self.model_info.toPlainText().replace(
-            'Клиент по умолчанию: ' + str(previous or client_launcher.preferred_client({'id': alias})),
-            'Клиент по умолчанию: ' + client))
-        self.set_message(f'{alias}: клиент по умолчанию — {client} (сохранено в models.json)')
+            T('Клиент по умолчанию: ') + str(previous or client_launcher.preferred_client({'id': alias})),
+            T('Клиент по умолчанию: ') + client))
+        self.set_message(T(f'{alias}: клиент по умолчанию — {client} (сохранено в models.json)'))
 
     def open_model_client(self, client):
         alias = self.selected_alias()
@@ -543,18 +597,18 @@ class Window(QMainWindow):
             folder = client_launcher.workspace_dir()
             terminal = shutil.which('konsole')
             if not terminal:
-                raise FileNotFoundError('Не найдена Konsole. Для CachyOS: sudo pacman -S konsole')
+                raise FileNotFoundError(T('Не найдена Konsole. Для CachyOS: sudo pacman -S konsole'))
             argv = [terminal, '--noclose', '-e', sys.executable, '-u',
                     str(core.ROOT / 'client_launcher.py'), '--client', client,
                     '--model', alias]
             subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
-            self.set_message(f"Открываю {client} → {alias} :{info['port']} · папка {folder}")
+            self.set_message(T(f"Открываю {client} → {alias} :{info['port']} · папка {folder}"))
         except RuntimeError as exc:
-            QMessageBox.information(self, 'Запуск клиента',
-                                    f'{exc}\n\nПредпочитаемый клиент можно выбрать и сохранить без запуска модели.')
+            QMessageBox.information(self, T('Запуск клиента'),
+                                    T(f'{exc}\n\nПредпочитаемый клиент можно выбрать и сохранить без запуска модели.'))
         except Exception as exc:
-            QMessageBox.warning(self, 'Открытие ИИ-клиента', str(exc))
+            QMessageBox.warning(self, T('Открытие ИИ-клиента'), str(exc))
 
     def setup_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -565,14 +619,14 @@ class Window(QMainWindow):
         if icon.isNull():
             icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
         self.tray = QSystemTrayIcon(icon, self)
-        self.tray.setToolTip('AI Model Lab — локальные ИИ-серверы')
+        self.tray.setToolTip(T('AI Model Lab — локальные ИИ-серверы'))
         menu = QMenu(self)
-        action_show = menu.addAction('Открыть AI Model Lab')
+        action_show = menu.addAction(T('Открыть AI Model Lab'))
         action_show.triggered.connect(self.show_from_tray)
-        menu.addAction('Тесты', lambda: self.show_tab_from_tray(2))
-        menu.addAction('Управление', lambda: self.show_tab_from_tray(1))
+        menu.addAction(T('Тесты'), lambda: self.show_tab_from_tray(2))
+        menu.addAction(T('Управление'), lambda: self.show_tab_from_tray(1))
         menu.addSeparator()
-        quit_action = menu.addAction('Закрыть приложение (серверы оставить)')
+        quit_action = menu.addAction(T('Закрыть приложение (серверы оставить)'))
         quit_action.triggered.connect(self.quit_from_tray)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self.tray_activated)
@@ -593,7 +647,7 @@ class Window(QMainWindow):
 
     def quit_from_tray(self):
         if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
-            QMessageBox.information(self, 'Активный тест', 'Сначала останови тест, чтобы не потерять отчёт.')
+            QMessageBox.information(self, T('Активный тест'), T('Сначала останови тест, чтобы не потерять отчёт.'))
             self.show_tab_from_tray(2)
             return
         self.exit_requested = True
@@ -614,10 +668,10 @@ class Window(QMainWindow):
     def show_log_dialog(self, alias):
         path = multi.log_path(alias) if alias else None
         if not path or not path.is_file():
-            QMessageBox.information(self, 'Логи', 'Для выбранной модели журнала пока нет.')
+            QMessageBox.information(self, T('Логи'), T('Для выбранной модели журнала пока нет.'))
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle(f'Журнал {alias} — {path.name}')
+        dialog.setWindowTitle(T(f'Журнал {alias} — {path.name}'))
         dialog.resize(950, 680)
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel(str(path)))
@@ -628,12 +682,12 @@ class Window(QMainWindow):
             if size > 2_000_000:
                 stream.seek(-2_000_000, 2)
             content = stream.read().decode('utf-8', 'replace')
-        view.setPlainText(('Показаны последние 2 МБ (файл больше 2 МБ).\n\n' if size > 2_000_000 else '') + content)
+        view.setPlainText((T('Показаны последние 2 МБ (файл больше 2 МБ).\n\n') if size > 2_000_000 else '') + content)
         view.moveCursor(QTextCursor.MoveOperation.End)
         layout.addWidget(view, 1)
         row = QHBoxLayout()
-        row.addWidget(btn('Открыть файл внешним редактором', lambda: self.open_url(path.as_uri())))
-        row.addWidget(btn('Закрыть', dialog.accept))
+        row.addWidget(btn(T('Открыть файл внешним редактором'), lambda: self.open_url(path.as_uri())))
+        row.addWidget(btn(T('Закрыть'), dialog.accept))
         layout.addLayout(row)
         dialog.exec()
 
@@ -650,7 +704,7 @@ class Window(QMainWindow):
         left_wrap = QWidget(); left_layout = QVBoxLayout(left_wrap)
         left_layout.setContentsMargins(0, 0, 0, 0); left_layout.setSpacing(6)
         self.tree = QTreeWidget(); self.tree.setColumnCount(7)
-        self.tree.setHeaderLabels(['Модель', 'Статус', 'Контекст', 'GPU', 'Порт', 'PID', 'Назначение'])
+        self.tree.setHeaderLabels([T('Модель'), T('Статус'), T('Контекст'), 'GPU', T('Порт'), 'PID', T('Назначение')])
         self.tree.setRootIsDecorated(False)
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -677,57 +731,57 @@ class Window(QMainWindow):
         left_layout.addWidget(self.tree, 3)
         actions = QHBoxLayout()
         actions.setSpacing(6)
-        actions.addWidget(slim_btn('＋ Добавить', self.add_model, primary=True))
-        actions.addWidget(slim_btn('⧉ Клонировать', self.clone_selected_model))
-        actions.addWidget(slim_btn('－ Удалить', self.delete_selected_model, danger=True))
-        actions.addWidget(slim_btn('✎ Изменить', self.open_selected_in_editor))
+        actions.addWidget(slim_btn(T('＋ Добавить'), self.add_model, primary=True))
+        actions.addWidget(slim_btn(T('⧉ Клонировать'), self.clone_selected_model))
+        actions.addWidget(slim_btn(T('－ Удалить'), self.delete_selected_model, danger=True))
+        actions.addWidget(slim_btn(T('✎ Изменить'), self.open_selected_in_editor))
         actions.addStretch()
         left_layout.addLayout(actions)
-        self.status_label = QLabel('Статус: ожидание'); self.status_label.setObjectName('Subheader')
+        self.status_label = QLabel(T('Статус: ожидание')); self.status_label.setObjectName('Subheader')
         self.status_label.setWordWrap(True); left_layout.addWidget(self.status_label)
-        logs_group = QGroupBox('Живой журнал выбранной модели'); logs_layout = QVBoxLayout(logs_group)
+        logs_group = QGroupBox(T('Живой журнал выбранной модели')); logs_layout = QVBoxLayout(logs_group)
         self.live_logs = QPlainTextEdit(); self.live_logs.setReadOnly(True)
         self.live_logs.setMaximumBlockCount(1000); self.live_logs.setMinimumHeight(140)
         logs_layout.addWidget(self.live_logs)
         log_buttons = QHBoxLayout()
-        log_buttons.addWidget(btn('Открыть полный лог', self.open_full_log))
-        log_buttons.addWidget(btn('Показать последнюю запись', self.reset_log_view))
+        log_buttons.addWidget(btn(T('Открыть полный лог'), self.open_full_log))
+        log_buttons.addWidget(btn(T('Показать последнюю запись'), self.reset_log_view))
         logs_layout.addLayout(log_buttons)
         left_layout.addWidget(logs_group, 2)
         split.addWidget(left_wrap)
         right = QWidget(); r = QVBoxLayout(right)
-        box = QGroupBox('Выбранная модель'); f = QVBoxLayout(box)
+        box = QGroupBox(T('Выбранная модель')); f = QVBoxLayout(box)
         self.model_info = QPlainTextEdit(); self.model_info.setReadOnly(True)
         self.model_info.setMinimumHeight(210)
         f.addWidget(self.model_info, 1)
-        self.model_action_btn = QPushButton('● Статус модели')
+        self.model_action_btn = QPushButton(T('● Статус модели'))
         self.model_action_btn.clicked.connect(self.model_action)
         f.addWidget(self.model_action_btn)
         client_row = QHBoxLayout()
-        self.client_open_btn = btn('⌘ Открыть в', self.open_preferred_client, primary=True)
-        self.client_open_btn.setToolTip('Запустить выбранный клиент для работающей модели')
+        self.client_open_btn = btn(T('⌘ Открыть в'), self.open_preferred_client, primary=True)
+        self.client_open_btn.setToolTip(T('Запустить выбранный клиент для работающей модели'))
         client_row.addWidget(self.client_open_btn, 1)
         self.client_combo = QComboBox()
         self.client_combo.addItem('Pi', 'pi')
         self.client_combo.addItem('OpenCode', 'opencode')
         self.client_combo.setMinimumWidth(125)
-        self.client_combo.setToolTip('Предпочитаемый клиент: выбор сохраняется даже если модель остановлена')
+        self.client_combo.setToolTip(T('Предпочитаемый клиент: выбор сохраняется даже если модель остановлена'))
         self.client_combo.currentIndexChanged.connect(self.on_client_preference_changed)
         client_row.addWidget(self.client_combo, 1)
         self.client_install_btn = btn('?', lambda: self.show_missing_client_help(self.client_combo.currentData()))
-        self.client_install_btn.setToolTip('Инструкция по установке выбранного клиента')
+        self.client_install_btn.setToolTip(T('Инструкция по установке выбранного клиента'))
         self.client_install_btn.setFixedWidth(34)
         client_row.addWidget(self.client_install_btn)
         f.addLayout(client_row)
-        self.client_hint = QLabel('Выбор клиента сохраняется независимо от состояния модели')
+        self.client_hint = QLabel(T('Выбор клиента сохраняется независимо от состояния модели'))
         self.client_hint.setWordWrap(True)
         self.client_hint.setStyleSheet('color:#a1b4cf;font-size:11px;')
         f.addWidget(self.client_hint)
-        f.addWidget(btn('✎ Редактировать параметры', self.open_selected_in_editor))
-        f.addWidget(btn('🌐 Открыть WebUI', self.open_webui))
-        f.addWidget(btn('🏢 Открыть Agent Office', self.open_office))
+        f.addWidget(btn(T('✎ Редактировать параметры'), self.open_selected_in_editor))
+        f.addWidget(btn(T('🌐 Открыть WebUI'), self.open_webui))
+        f.addWidget(btn(T('🏢 Открыть Agent Office'), self.open_office))
         r.addWidget(box)
-        hint = QLabel('Каждая модель: свой порт и GPU. Двойной щелчок → редактор.\nШирина колонок сохраняется автоматически.')
+        hint = QLabel(T('Каждая модель: свой порт и GPU. Двойной щелчок → редактор.\nШирина колонок сохраняется автоматически.'))
         hint.setWordWrap(True); r.addWidget(hint)
         split.addWidget(right)
         split.setChildrenCollapsible(False)
@@ -755,7 +809,7 @@ class Window(QMainWindow):
         self._tree_loading = True
         self.tree.clear()
         for p in self.cfg.get('models', []):
-            it = QTreeWidgetItem([p.get('name', p['id']), '—', f"{int(p['context']) // 1024}K", '—', '—', '—', p.get('purpose', '—')])
+            it = QTreeWidgetItem([p.get('name', p['id']), '—', f"{int(p['context']) // 1024}K", '—', '—', '—', T(p.get('purpose', '—'))])
             it.setData(0, Qt.ItemDataRole.UserRole, p['id'])
             self.tree.addTopLevelItem(it)
         self._tree_loading = False
@@ -764,13 +818,13 @@ class Window(QMainWindow):
 
     def update_model_status_cells(self):
         palette = {
-            'running': ('● Запущена', '#63d6ac'),
-            'starting': ('● Загрузка', '#ffc578'),
-            'error': ('● Ошибка', '#e58f9b'),
-            'external': ('● Порт занят', '#ffc578'),
-            'port_conflict': ('● Порт занят', '#ffc578'),
-            'stopped': ('● Остановлена', '#a1b4cf'),
-            'unstarted': ('○ Не запущена', '#91a4bc'),
+            'running': (T('● Запущена'), '#63d6ac'),
+            'starting': (T('● Загрузка'), '#ffc578'),
+            'error': (T('● Ошибка'), '#e58f9b'),
+            'external': (T('● Порт занят'), '#ffc578'),
+            'port_conflict': (T('● Порт занят'), '#ffc578'),
+            'stopped': (T('● Остановлена'), '#a1b4cf'),
+            'unstarted': (T('○ Не запущена'), '#91a4bc'),
         }
         states = multi.all_states()
         for i in range(self.tree.topLevelItemCount()):
@@ -778,14 +832,14 @@ class Window(QMainWindow):
             alias = it.data(0, Qt.ItemDataRole.UserRole)
             profile = self.profile_lookup(alias) or {}
             state = states.get(alias, {})
-            status, color = palette.get(state.get('state', 'unstarted'), ('○ Не запущена', '#91a4bc'))
+            status, color = palette.get(state.get('state', 'unstarted'), (T('○ Не запущена'), '#91a4bc'))
             it.setText(1, status)
             it.setForeground(1, QBrush(QColor(color)))
             live = bool(state.get('managed') and state.get('alive'))
-            gpu = str(state.get('gpu') or profile.get('gpu') or 'авто')
+            gpu = str(state.get('gpu') or profile.get('gpu') or T('авто'))
             gpu_text = gpu if len(gpu) < 23 else gpu[:18] + '…'
             it.setText(3, gpu_text)
-            it.setToolTip(3, f"GPU {'запущенного сервера' if live else 'в настройках'}: {gpu}")
+            it.setToolTip(3, T(f"GPU {'запущенного сервера' if live else 'в настройках'}: {gpu}"))
             it.setText(4, str(state.get('port') if live else profile.get('port', 8080)))
             it.setText(5, str(state.get('pid')) if live and state.get('pid') else '—')
             if not live:
@@ -794,21 +848,22 @@ class Window(QMainWindow):
             else:
                 for column in (3, 4, 5):
                     it.setForeground(column, QBrush(QColor('#e9f0fb')))
-            it.setToolTip(4, 'Фактический порт процесса' if live else 'Порт, заданный в профиле')
+            it.setToolTip(4, T('Фактический порт процесса') if live else T('Порт, заданный в профиле'))
 
     def on_model_selected(self, *_):
         p = self.selected_model_profile()
         if not p: return
-        try: path = str(core.resolve_gguf(p)); presence = '✓ GGUF найден'
-        except Exception as exc: path = str(exc); presence = '⚠ Проверить GGUF'
+        try: path = str(core.resolve_gguf(p)); presence = T('✓ GGUF найден')
+        except Exception as exc: path = str(exc); presence = T('⚠ Проверить GGUF')
         state = multi.inspect(p['id'])
+        purpose_display = T(p.get('purpose', '—'))
         self.model_info.setPlainText(
-            f"{p['name']}\n\nНазначение: {p.get('purpose', '—')}\n"
+            T(f"{p['name']}\n\nНазначение: {purpose_display}\n"
             f"Alias: {p['id']}\nКлиент по умолчанию: {client_launcher.preferred_client(p)}\nКонтекст: {int(p['context']):,} токенов\n"
             f"GPU: {p.get('gpu') or 'автоматически'} · порт API: {p.get('port', 8080)}\n"
             f"Статус: {state.get('state')}\n"
             f"KV: {p.get('cache_type_k','q8_0')} / {p.get('cache_type_v','q8_0')}\n\n"
-            f"{presence}\n{path}")
+            f"{presence}\n{path}"))
         self.reset_log_view()
         self.refresh_model_action_button()
         self.refresh_preferred_client_button()
@@ -819,19 +874,19 @@ class Window(QMainWindow):
         state = multi.inspect(selected)
         status = state.get('state')
         if self.model_action_busy:
-            text, style = '⏳ Выполняется операция…', 'background:#675225;border:1px solid #d0a13c;'
+            text, style = T('⏳ Выполняется операция…'), 'background:#675225;border:1px solid #d0a13c;'
         elif status == 'running':
-            text, style = '🟢 Запущена — остановить эту модель', 'background:#255b47;border:1px solid #56b790;'
+            text, style = T('🟢 Запущена — остановить эту модель'), 'background:#255b47;border:1px solid #56b790;'
         elif status == 'starting':
-            text, style = '🟡 Модель загружается — остановить', 'background:#5a4a20;border:1px solid #d6b15b;'
+            text, style = T('🟡 Модель загружается — остановить'), 'background:#5a4a20;border:1px solid #d6b15b;'
         elif status in ('external','port_conflict'):
-            owner = state.get('other_alias') or 'другим сервером'
-            text, style = f'🟠 Порт занят ({owner}) — настроить', 'background:#5a3f20;border:1px solid #d18d4b;'
+            owner = state.get('other_alias') or T('другим сервером')
+            text, style = T(f'🟠 Порт занят ({owner}) — настроить'), 'background:#5a3f20;border:1px solid #d18d4b;'
         elif status == 'error':
-            text, style = '🔴 Ошибка — попробовать запустить снова', 'background:#63333b;border:1px solid #ae5364;'
+            text, style = T('🔴 Ошибка — попробовать запустить снова'), 'background:#63333b;border:1px solid #ae5364;'
         else:
             p = self.selected_model_profile()
-            text, style = f"⚪ Запустить на GPU {p.get('gpu') or 'авто'} · :{p.get('port',8080)}", 'background:#245e9a;border:1px solid #438de1;'
+            text, style = T(f"⚪ Запустить на GPU {p.get('gpu') or 'авто'} · :{p.get('port',8080)}"), 'background:#245e9a;border:1px solid #438de1;'
         self.model_action_btn.setText(text)
         self.model_action_btn.setStyleSheet(style + 'font-weight:700;')
 
@@ -840,14 +895,14 @@ class Window(QMainWindow):
         if not selected or self.model_action_busy: return
         state = multi.inspect(selected)
         if state.get('state') in ('running', 'starting') and state.get('managed'):
-            self.confirm_action(f'Остановить только {selected}?', lambda: multi.stop(selected), after=self.finish_model_action)
+            self.confirm_action(T(f'Остановить только {selected}?'), lambda: multi.stop(selected), after=self.finish_model_action)
         elif state.get('state') in ('external','port_conflict'):
-            QMessageBox.information(self, 'Порт занят', f"На порту {state.get('port')} работает другая модель или сервер. Откроется редактор — укажи свободный порт.")
+            QMessageBox.information(self, T('Порт занят'), T(f"На порту {state.get('port')} работает другая модель или сервер. Откроется редактор — укажи свободный порт."))
             self.open_selected_in_editor()
         else:
             self.model_action_busy = True
             self.refresh_model_action_button()
-            self.async_call('Загрузка ' + selected, lambda: multi.launch(selected), after=self.finish_model_action)
+            self.async_call(T('Загрузка ') + selected, lambda: multi.launch(selected), after=self.finish_model_action)
 
     def finish_model_action(self, ok, text):
         self.model_action_busy = False
@@ -880,10 +935,10 @@ class Window(QMainWindow):
         content.setMinimumHeight(640)
         l = QVBoxLayout(content)
         w.setWidget(content)
-        label = QLabel('Все llama.cpp запускаются независимо по портам/GPU. Остановка одного не затрагивает другие серверы.')
+        label = QLabel(T('Все llama.cpp запускаются независимо по портам/GPU. Остановка одного не затрагивает другие серверы.'))
         label.setWordWrap(True); l.addWidget(label)
         self.instances_table = QTableWidget(0, 6)
-        self.instances_table.setHorizontalHeaderLabels(['Модель', 'GPU', 'Порт', 'Статус', 'PID', 'Время работы'])
+        self.instances_table.setHorizontalHeaderLabels([T('Модель'), 'GPU', T('Порт'), T('Статус'), 'PID', T('Время работы')])
         self.instances_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.instances_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.instances_table.setMinimumHeight(190)
@@ -891,14 +946,14 @@ class Window(QMainWindow):
         self.instances_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.instances_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.instances_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self.no_instances = QLabel('Нет активных экземпляров llama.cpp')
+        self.no_instances = QLabel(T('Нет активных экземпляров llama.cpp'))
         self.no_instances.setObjectName('Subheader')
         l.addWidget(self.no_instances)
         l.addWidget(self.instances_table)
         row = QHBoxLayout()
-        row.addWidget(btn('📄 Лог выбранного', self.open_selected_instance_log))
-        row.addWidget(btn('⏹ Остановить выбранный экземпляр', self.stop_selected_instance, danger=True))
-        row.addWidget(btn('⏹ Остановить все llama.cpp', self.stop_all_llama, danger=True))
+        row.addWidget(btn(T('📄 Лог выбранного'), self.open_selected_instance_log))
+        row.addWidget(btn(T('⏹ Остановить выбранный экземпляр'), self.stop_selected_instance, danger=True))
+        row.addWidget(btn(T('⏹ Остановить все llama.cpp'), self.stop_all_llama, danger=True))
         l.addLayout(row)
         self.service_labels = {}
         services = [
@@ -908,13 +963,13 @@ class Window(QMainWindow):
         ]
         for sid, name, start, stop, open_action in services:
             group = QGroupBox(name); item = QHBoxLayout(group)
-            lab = QLabel('Проверяется…'); self.service_labels[sid] = lab
+            lab = QLabel(T('Проверяется…')); self.service_labels[sid] = lab
             item.addWidget(lab, 1)
-            item.addWidget(btn('▶ Запустить', lambda s=start,n=name: self.async_call('Запуск '+n,s), True))
-            item.addWidget(btn('⏹ Остановить', lambda s=stop,n=name: self.confirm_action('Остановить '+n+'?',s), danger=True))
-            item.addWidget(btn('Открыть',open_action))
+            item.addWidget(btn(T('▶ Запустить'), lambda s=start,n=name: self.async_call(T('Запуск ')+n,s), True))
+            item.addWidget(btn(T('⏹ Остановить'), lambda s=stop,n=name: self.confirm_action(T('Остановить ')+n+'?',s), danger=True))
+            item.addWidget(btn(T('Открыть'),open_action))
             l.addWidget(group)
-        l.addWidget(btn('⏹ Остановить ВСЕ управляемые AI-сервисы', self.stop_all, danger=True))
+        l.addWidget(btn(T('⏹ Остановить ВСЕ управляемые AI-сервисы'), self.stop_all, danger=True))
         return w
 
     def update_instances_table(self):
@@ -934,7 +989,7 @@ class Window(QMainWindow):
                     uptime = f'{elapsed // 3600:02}:{(elapsed // 60) % 60:02}:{elapsed % 60:02}'
                 except (ValueError, TypeError):
                     pass
-            fields = [alias, state.get('gpu') or p.get('gpu') or 'авто',
+            fields = [alias, state.get('gpu') or p.get('gpu') or T('авто'),
                       state.get('port', p.get('port', 8080)), state.get('state'),
                       state.get('pid') or '—', uptime]
             for j, value in enumerate(fields):
@@ -955,15 +1010,15 @@ class Window(QMainWindow):
         item = self.instances_table.item(row, 0) if row >= 0 else None
         if not item: return
         alias = item.text()
-        self.confirm_action(f'Остановить только {alias}?', lambda: multi.stop(alias))
+        self.confirm_action(T(f'Остановить только {alias}?'), lambda: multi.stop(alias))
 
     def stop_all_llama(self):
-        self.confirm_action('Остановить все llama-server, запущенные AI Lab?', multi.stop_all)
+        self.confirm_action(T('Остановить все llama-server, запущенные AI Lab?'), multi.stop_all)
 
     def stop_all(self):
         def work():
             return '\n'.join((multi.stop_all(), core.stop('office'), core.stop('comfy'), core.webui_stop()))
-        self.confirm_action('Остановить ВСЕ управляемые AI-сервисы?', work)
+        self.confirm_action(T('Остановить ВСЕ управляемые AI-сервисы?'), work)
 
     # ---------- Tests tab ----------
     def build_tests(self):
@@ -973,55 +1028,55 @@ class Window(QMainWindow):
         content.setMinimumHeight(580)
         l = QVBoxLayout(content)
         w.setWidget(content)
-        options = QGroupBox('Встроенные бенчмарки (файлы и отчёты внутри AI Model Lab)')
+        options = QGroupBox(T('Встроенные бенчмарки (файлы и отчёты внутри AI Model Lab)'))
         form = QGridLayout(options)
-        form.addWidget(QLabel('Испытание'), 0, 0)
+        form.addWidget(QLabel(T('Испытание')), 0, 0)
         self.test_kind = QComboBox()
         for key, name in [
-            ('speed', 'Скорость API — до 256 токенов'), ('speed512', 'Скорость API — до 512 токенов'),
-            ('qa', 'Логика / арифметика (3 задачи)'), ('context8', 'Длинный контекст (около 8K)'),
-            ('context32', 'Длинный контекст (около 32K)'), ('p1', 'Android LP-P1: STB UI → VOD'),
-            ('p2', 'Android LP-P2: выбор плеера')
+            ('speed', T('Скорость API — до 256 токенов')), ('speed512', T('Скорость API — до 512 токенов')),
+            ('qa', T('Логика / арифметика (3 задачи)')), ('context8', T('Длинный контекст (около 8K)')),
+            ('context32', T('Длинный контекст (около 32K)')), ('p1', 'Android LP-P1: STB UI → VOD'),
+            ('p2', T('Android LP-P2: выбор плеера'))
         ]:
             self.test_kind.addItem(name, key)
         form.addWidget(self.test_kind, 0, 1, 1, 3)
-        form.addWidget(QLabel('Экземпляр модели'), 1, 0)
+        form.addWidget(QLabel(T('Экземпляр модели')), 1, 0)
         self.test_instance = QComboBox()
         form.addWidget(self.test_instance, 1, 1, 1, 3)
-        form.addWidget(QLabel('Android-проект'), 2, 0)
+        form.addWidget(QLabel(T('Android-проект')), 2, 0)
         self.project = QLineEdit(self.settings_data.get('android_project', ''))
         form.addWidget(self.project, 2, 1, 1, 2)
-        form.addWidget(btn('Обзор', self.browse_project), 2, 3)
-        form.addWidget(QLabel('Лимит времени, с'), 3, 0)
+        form.addWidget(btn(T('Обзор'), self.browse_project), 2, 3)
+        form.addWidget(QLabel(T('Лимит времени, с')), 3, 0)
         self.timeout = QSpinBox()
         self.timeout.setRange(30, 7200)
         self.timeout.setValue(int(self.settings_data.get('benchmark_timeout', 1800)))
         form.addWidget(self.timeout, 3, 1)
-        form.addWidget(QLabel('Лимит инструментов Pi'), 3, 2)
+        form.addWidget(QLabel(T('Лимит инструментов Pi')), 3, 2)
         self.budget = QSpinBox()
         self.budget.setRange(1, 200)
         self.budget.setValue(int(self.settings_data.get('tool_budget', 24)))
         form.addWidget(self.budget, 3, 3)
         row = QHBoxLayout()
-        self.run_btn = btn('▶ Запустить испытание', self.launch_test, True)
+        self.run_btn = btn(T('▶ Запустить испытание'), self.launch_test, True)
         row.addWidget(self.run_btn)
-        self.cancel_btn = btn('⏹ Прервать испытание', self.cancel_test, False, True)
+        self.cancel_btn = btn(T('⏹ Прервать испытание'), self.cancel_test, False, True)
         self.cancel_btn.setEnabled(False)
         row.addWidget(self.cancel_btn)
-        row.addWidget(btn('📁 Папка отчётов', lambda: self.open_url(core.REPORTS.as_uri())))
+        row.addWidget(btn(T('📁 Папка отчётов'), lambda: self.open_url(core.REPORTS.as_uri())))
         l.addWidget(options)
         l.addLayout(row)
-        warn = QLabel('⚠ Android: Pi получает только инструменты чтения, но это НЕ файловая песочница. Не запускай на секретных репозиториях без отдельной изоляции.')
+        warn = QLabel(T('⚠ Android: Pi получает только инструменты чтения, но это НЕ файловая песочница. Не запускай на секретных репозиториях без отдельной изоляции.'))
         warn.setWordWrap(True)
         l.addWidget(warn)
         self.test_output = QTextEdit()
         self.test_output.setReadOnly(True)
-        self.test_output.setPlaceholderText('Здесь будет вывод теста, результаты записываются в папку data/reports/')
+        self.test_output.setPlaceholderText(T('Здесь будет вывод теста, результаты записываются в папку data/reports/'))
         l.addWidget(self.test_output, 1)
         return w
 
     def browse_project(self):
-        chosen = QFileDialog.getExistingDirectory(self, 'Выбрать Android-проект', self.project.text() or str(Path.home()))
+        chosen = QFileDialog.getExistingDirectory(self, T('Выбрать Android-проект'), self.project.text() or str(Path.home()))
         if chosen:
             self.project.setText(chosen)
 
@@ -1030,7 +1085,7 @@ class Window(QMainWindow):
         self.test_instance.clear()
         for alias, state in multi.active_instances().items():
             if state.get('state') == 'running':
-                self.test_instance.addItem(f"{alias} · GPU {state.get('gpu') or 'авто'} · :{state.get('port')}", (alias, state['port']))
+                self.test_instance.addItem(T(f"{alias} · GPU {state.get('gpu') or 'авто'} · :{state.get('port')}"), (alias, state['port']))
         if previous:
             for i in range(self.test_instance.count()):
                 if self.test_instance.itemData(i) == previous:
@@ -1043,22 +1098,22 @@ class Window(QMainWindow):
         selection = self.test_instance.currentData()
         alias, port = selection if selection else (None, None)
         if not alias:
-            QMessageBox.warning(self, 'Нет модели', 'Сначала запусти llama-server с нужной моделью.')
+            QMessageBox.warning(self, T('Нет модели'), T('Сначала запусти llama-server с нужной моделью.'))
             return
         kind = self.test_kind.currentData()
         actual = 'speed' if kind.startswith('speed') else ('context' if kind.startswith('context') else kind)
         if actual in ('p1', 'p2'):
             try:
                 if port != 8080:
-                    raise RuntimeError('Android Pi local-lab сейчас настроен на порт 8080. API-тесты доступны на любом порту, Android — только на 8080 до изменения Pi provider.')
+                    raise RuntimeError(T('Android Pi local-lab сейчас настроен на порт 8080. API-тесты доступны на любом порту, Android — только на 8080 до изменения Pi provider.'))
                 core.preflight_android()
             except Exception as exc:
-                QMessageBox.warning(self, 'Проверка контекста', str(exc))
+                QMessageBox.warning(self, T('Проверка контекста'), str(exc))
                 return
             if not Path(self.project.text()).is_dir():
-                QMessageBox.warning(self, 'Android-проект', 'Выбери существующий каталог.')
+                QMessageBox.warning(self, T('Android-проект'), T('Выбери существующий каталог.'))
                 return
-            if QMessageBox.question(self, 'Доступ Pi', 'Испытание читает Android-проект через Pi read/grep/find/ls.\nЭто НЕ ОС-песочница. Продолжить?') != QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self, T('Доступ Pi'), T('Испытание читает Android-проект через Pi read/grep/find/ls.\nЭто НЕ ОС-песочница. Продолжить?')) != QMessageBox.StandardButton.Yes:
                 return
         profile = self.profile_lookup(alias) or {}
         args = [
@@ -1067,7 +1122,7 @@ class Window(QMainWindow):
             '--output-tokens', str(512 if kind == 'speed512' else 256),
             '--target-tokens', str(32768 if kind == 'context32' else 8192)
         ]
-        self.test_output.append('▶ Тест ' + kind + ' · ' + alias)
+        self.test_output.append(T('▶ Тест ') + kind + ' · ' + alias)
         self.proc = QProcess(self)
         self.proc.setWorkingDirectory(str(core.ROOT))
         self.proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
@@ -1075,7 +1130,7 @@ class Window(QMainWindow):
         self.proc.finished.connect(self.test_finished)
         self.proc.start(sys.executable, args)
         if not self.proc.waitForStarted(2500):
-            self.test_output.append('Не удалось запустить benchmark runner.')
+            self.test_output.append(T('Не удалось запустить benchmark runner.'))
             return
         self.run_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
@@ -1092,12 +1147,12 @@ class Window(QMainWindow):
         self.test_pipe()
         self.run_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
-        self.test_output.append(f'\nПроцесс завершился: exit={exit_code}')
+        self.test_output.append(T(f'\nПроцесс завершился: exit={exit_code}'))
         self.refresh_reports()
 
     def cancel_test(self):
         if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
-            if QMessageBox.question(self, 'Прервать тест', 'Прервать текущий эксперимент? Успевшие записаться события сохранятся.') == QMessageBox.StandardButton.Yes:
+            if QMessageBox.question(self, T('Прервать тест'), T('Прервать текущий эксперимент? Успевшие записаться события сохранятся.')) == QMessageBox.StandardButton.Yes:
                 self.proc.terminate()
 
     # ---------- Reports tab ----------
@@ -1109,22 +1164,22 @@ class Window(QMainWindow):
         l = QVBoxLayout(content)
         w.setWidget(content)
         row = QHBoxLayout()
-        row.addWidget(btn('↻ Обновить отчёты', self.refresh_reports))
-        row.addWidget(btn('🔎 Сравнить два выбранных', self.compare_reports))
-        row.addWidget(slim_btn('🧹 Очистить старые', self.cleanup_old_artifacts))
-        row.addWidget(slim_btn('🗑 Очистить все отчёты', self.clear_all_reports, danger=True))
+        row.addWidget(btn(T('↻ Обновить отчёты'), self.refresh_reports))
+        row.addWidget(btn(T('🔎 Сравнить два выбранных'), self.compare_reports))
+        row.addWidget(slim_btn(T('🧹 Очистить старые'), self.cleanup_old_artifacts))
+        row.addWidget(slim_btn(T('🗑 Очистить все отчёты'), self.clear_all_reports, danger=True))
         row.addStretch()
         l.addLayout(row)
         self.reports = QTableWidget(0, 6)
-        self.reports.setHorizontalHeaderLabels(['Дата/папка', 'Модель', 'Тест', 'Статус', 'Время, с', 'VRAM, MiB'])
+        self.reports.setHorizontalHeaderLabels([T('Дата/папка'), T('Модель'), T('Тест'), T('Статус'), T('Время, с'), 'VRAM, MiB'])
         self.reports.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.reports.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.reports.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.reports.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         l.addWidget(self.reports, 1)
         row2 = QHBoxLayout()
-        row2.addWidget(btn('Показать summary.json', self.show_report))
-        row2.addWidget(btn('Открыть папку отчёта', self.open_report_dir))
+        row2.addWidget(btn(T('Показать summary.json'), self.show_report))
+        row2.addWidget(btn(T('Открыть папку отчёта'), self.open_report_dir))
         row2.addStretch()
         l.addLayout(row2)
         self.report_text = QTextEdit()
@@ -1179,7 +1234,7 @@ class Window(QMainWindow):
     def compare_reports(self):
         files = self.selected_reports()
         if len(files) != 2:
-            QMessageBox.information(self, 'Сравнение', 'Выбери ровно два отчёта (Ctrl + щелчок).')
+            QMessageBox.information(self, T('Сравнение'), T('Выбери ровно два отчёта (Ctrl + щелчок).'))
             return
         a, b = (core.load_json(p, {}) for p in files)
         ra = a.get('result', {})
@@ -1187,12 +1242,12 @@ class Window(QMainWindow):
         equal = ra.get('prompt_sha256') and ra.get('prompt_sha256') == rb.get('prompt_sha256')
         kind_ok = a.get('kind') == b.get('kind')
         self.report_text.setPlainText(
-            'СРАВНЕНИЕ\n\n' + '\n'.join(f"{k}: {a.get(k)} | {b.get(k)}" for k in ('model', 'kind', 'elapsed_s')) +
-            f"\n\nStatus: {ra.get('status')} | {rb.get('status')}\n"
+            T('СРАВНЕНИЕ\n\n') + '\n'.join(f"{k}: {a.get(k)} | {b.get(k)}" for k in ('model', 'kind', 'elapsed_s')) +
+            T(f"\n\nStatus: {ra.get('status')} | {rb.get('status')}\n"
             f"VRAM peak: {(a.get('hardware', {}).get('vram_mib') or {}).get('max')} | {(b.get('hardware', {}).get('vram_mib') or {}).get('max')} MiB\n"
             f"Энергия: {a.get('hardware', {}).get('gpu_energy_wh_estimate')} | {b.get('hardware', {}).get('gpu_energy_wh_estimate')} Wh\n"
             f"\nСопоставимость по SHA256: {'ДА' if equal else 'НЕТ'}; тип задания: {'одинаковый' if kind_ok else 'РАЗНЫЙ'}\n"
-            'Разная версия промпта или разные условия не дают сравнивать качество напрямую.'
+            'Разная версия промпта или разные условия не дают сравнивать качество напрямую.')
         )
 
     # ---------- Settings tab ----------
@@ -1208,14 +1263,14 @@ class Window(QMainWindow):
         l = QVBoxLayout(content)
         w.setWidget(content)
 
-        common = QGroupBox('Общие настройки программы и хранение данных')
+        common = QGroupBox(T('Общие настройки программы и хранение данных'))
         grid = QGridLayout(common)
         self.set_inputs = {}
         common_fields = [
-            ('android_project','Каталог Android-проекта'),('office_dir','Каталог Agent Office'),
-            ('office_url','URL Agent Office'),('comfy_dir','Каталог ComfyUI'),
-            ('webui_service','Служба WebUI'),('gpu_index','GPU для графика nvidia-smi'),
-            ('client_workspace','Рабочая папка OpenCode / Pi')
+            ('android_project',T('Каталог Android-проекта')),('office_dir',T('Каталог Agent Office')),
+            ('office_url','URL Agent Office'),('comfy_dir',T('Каталог ComfyUI')),
+            ('webui_service',T('Служба WebUI')),('gpu_index',T('GPU для графика nvidia-smi')),
+            ('client_workspace',T('Рабочая папка OpenCode / Pi'))
         ]
         for row, (key, label) in enumerate(common_fields):
             grid.addWidget(QLabel(label), row, 0)
@@ -1223,25 +1278,25 @@ class Window(QMainWindow):
             self.set_inputs[key] = inp
             if key == 'client_workspace':
                 grid.addWidget(inp, row, 1, 1, 2)
-                grid.addWidget(slim_btn('Обзор…', self.browse_client_workspace), row, 3)
+                grid.addWidget(slim_btn(T('Обзор…'), self.browse_client_workspace), row, 3)
             else:
                 grid.addWidget(inp, row, 1, 1, 3)
 
         retain_row = len(common_fields)
-        grid.addWidget(QLabel('Хранить логи, дней (0 = без удаления)'), retain_row, 0)
+        grid.addWidget(QLabel(T('Хранить логи, дней (0 = без удаления)')), retain_row, 0)
         self.logs_retention = QSpinBox(); self.logs_retention.setRange(0, 3650)
         self.logs_retention.setValue(int(self.settings_data.get('logs_retention_days', 30)))
         grid.addWidget(self.logs_retention, retain_row, 1)
-        grid.addWidget(QLabel('Хранить отчёты, дней (0 = без удаления)'), retain_row, 2)
+        grid.addWidget(QLabel(T('Хранить отчёты, дней (0 = без удаления)')), retain_row, 2)
         self.reports_retention = QSpinBox(); self.reports_retention.setRange(0, 3650)
         self.reports_retention.setValue(int(self.settings_data.get('reports_retention_days', 90)))
         grid.addWidget(self.reports_retention, retain_row, 3)
 
         cleanup_row = retain_row + 1
-        grid.addWidget(slim_btn('🧹 Очистить старые логи и отчёты', self.cleanup_old_artifacts), cleanup_row, 0)
-        grid.addWidget(slim_btn('🧾 Очистить все логи', self.clear_all_logs, danger=True), cleanup_row, 1)
-        grid.addWidget(slim_btn('📊 Очистить все отчёты', self.clear_all_reports, danger=True), cleanup_row, 2)
-        grid.addWidget(slim_btn('💾 Сохранить настройки программы', self.save_all_settings, primary=True), cleanup_row, 3)
+        grid.addWidget(slim_btn(T('🧹 Очистить старые логи и отчёты'), self.cleanup_old_artifacts), cleanup_row, 0)
+        grid.addWidget(slim_btn(T('🧾 Очистить все логи'), self.clear_all_logs, danger=True), cleanup_row, 1)
+        grid.addWidget(slim_btn(T('📊 Очистить все отчёты'), self.clear_all_reports, danger=True), cleanup_row, 2)
+        grid.addWidget(slim_btn(T('💾 Сохранить настройки программы'), self.save_all_settings, primary=True), cleanup_row, 3)
         l.addWidget(common)
 
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -1251,14 +1306,14 @@ class Window(QMainWindow):
 
         left = QWidget(); lv = QVBoxLayout(left)
         self.settings_tree = QTreeWidget(); self.settings_tree.setColumnCount(2)
-        self.settings_tree.setHeaderLabels(['ID','Название'])
+        self.settings_tree.setHeaderLabels(['ID',T('Название')])
         self.settings_tree.itemSelectionChanged.connect(self.load_selected_editor_model)
         lv.addWidget(self.settings_tree, 1)
         controls = QHBoxLayout()
         controls.setSpacing(6)
-        controls.addWidget(slim_btn('＋ Добавить', self.add_model, primary=True))
-        controls.addWidget(slim_btn('⧉ Клонировать', self.clone_model))
-        controls.addWidget(slim_btn('－ Удалить', self.delete_model, danger=True))
+        controls.addWidget(slim_btn(T('＋ Добавить'), self.add_model, primary=True))
+        controls.addWidget(slim_btn(T('⧉ Клонировать'), self.clone_model))
+        controls.addWidget(slim_btn(T('－ Удалить'), self.delete_model, danger=True))
         controls.addStretch()
         lv.addLayout(controls)
         split.addWidget(left)
@@ -1268,16 +1323,16 @@ class Window(QMainWindow):
         self.build_model_editor_form()
         rv.addWidget(self.editor_tabs, 1)
         sr = QHBoxLayout()
-        self.autosave_checkbox = QCheckBox('Автосохранение профиля')
+        self.autosave_checkbox = QCheckBox(T('Автосохранение профиля'))
         self.autosave_checkbox.setChecked(bool(self.settings_data.get('autosave_profiles', False)))
         self.autosave_checkbox.stateChanged.connect(self.toggle_autosave)
         sr.addWidget(self.autosave_checkbox)
-        sr.addWidget(btn('💾 Сохранить профиль', self.save_current_model, True))
+        sr.addWidget(btn(T('💾 Сохранить профиль'), self.save_current_model, True))
         rv.addLayout(sr)
-        self.editor_hint = QLabel('Изменения профиля не сохранены')
+        self.editor_hint = QLabel(T('Изменения профиля не сохранены'))
         self.editor_hint.setObjectName('Subheader'); rv.addWidget(self.editor_hint)
         split.addWidget(right); split.setSizes([360, 840])
-        note = QLabel('Сохранение не переписывает ~/.pi/agent/models.json. Для Android Pi проверь отдельно contextWindow, maxTokens и API-адрес. Очистка логов не удаляет журналы активных процессов.')
+        note = QLabel(T('Сохранение не переписывает ~/.pi/agent/models.json. Для Android Pi проверь отдельно contextWindow, maxTokens и API-адрес. Очистка логов не удаляет журналы активных процессов.'))
         note.setWordWrap(True); l.addWidget(note)
         self.populate_settings_tree()
         if self.settings_tree.topLevelItemCount():
@@ -1299,32 +1354,32 @@ class Window(QMainWindow):
         def combo(key,items): ef[key]=QComboBox(); ef[key].addItems(items); return ef[key]
 
         basic=QWidget(); f=QFormLayout(basic)
-        f.addRow('ID / alias',text('id')); f.addRow('Название',text('name'))
+        f.addRow('ID / alias',text('id')); f.addRow(T('Название'),text('name'))
         ef['preferred_client'] = QComboBox()
-        ef['preferred_client'].addItem('Pi — легковесный агент', 'pi')
-        ef['preferred_client'].addItem('OpenCode — агент разработки', 'opencode')
-        f.addRow('Клиент по умолчанию', ef['preferred_client'])
-        ef['purpose']=QPlainTextEdit(); ef['purpose'].setMaximumHeight(90); f.addRow('Назначение',ef['purpose'])
-        f.addRow('Контекст (токены)',spin('context',4096,524288,32768))
-        f.addRow('Порт API',spin('port',1024,65535,8080))
+        ef['preferred_client'].addItem(T('Pi — легковесный агент'), 'pi')
+        ef['preferred_client'].addItem(T('OpenCode — агент разработки'), 'opencode')
+        f.addRow(T('Клиент по умолчанию'), ef['preferred_client'])
+        ef['purpose']=QPlainTextEdit(); ef['purpose'].setMaximumHeight(90); f.addRow(T('Назначение'),ef['purpose'])
+        f.addRow(T('Контекст (токены)'),spin('context',4096,524288,32768))
+        f.addRow(T('Порт API'),spin('port',1024,65535,8080))
         ef['gpu'] = QComboBox()
         ef['gpu'].setEditable(True)
         ef['gpu'].setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        ef['gpu'].setToolTip('Для двух одинаковых GPU рекомендуется полный NVIDIA UUID. Также допустим индекс 0, 1…')
+        ef['gpu'].setToolTip(T('Для двух одинаковых GPU рекомендуется полный NVIDIA UUID. Также допустим индекс 0, 1…'))
         self.populate_gpu_choices()
-        f.addRow('GPU (UUID или индекс)', ef['gpu'])
+        f.addRow(T('GPU (UUID или индекс)'), ef['gpu'])
         self.gpu_info=QPlainTextEdit()
         self.gpu_info.setReadOnly(True)
         self.gpu_info.setMinimumHeight(105)
         self.gpu_info.setMaximumHeight(145)
-        self.gpu_info.setPlainText('\n'.join(multi.available_gpu_ids()) or 'GPU не обнаружены через nvidia-smi')
-        self.gpu_info.setToolTip('Фактические индексы, имена, UUID и VRAM из nvidia-smi')
-        f.addRow('Найденные GPU',self.gpu_info)
-        f.addRow('', btn('↻ Обновить список GPU', self.refresh_gpu_inventory))
-        f.addRow('Путь GGUF (относительный)',text('path'))
-        f.addRow('Шаблон GGUF',text('match'))
-        f.addRow('Доп. аргументы llama.cpp',text('extra_args'))
-        self.editor_scroll_tab('Основные',basic)
+        self.gpu_info.setPlainText('\n'.join(multi.available_gpu_ids()) or T('GPU не обнаружены через nvidia-smi'))
+        self.gpu_info.setToolTip(T('Фактические индексы, имена, UUID и VRAM из nvidia-smi'))
+        f.addRow(T('Найденные GPU'),self.gpu_info)
+        f.addRow('', btn(T('↻ Обновить список GPU'), self.refresh_gpu_inventory))
+        f.addRow(T('Путь GGUF (относительный)'),text('path'))
+        f.addRow(T('Шаблон GGUF'),text('match'))
+        f.addRow(T('Доп. аргументы llama.cpp'),text('extra_args'))
+        self.editor_scroll_tab(T('Основные'),basic)
 
         sampling=QWidget(); f=QFormLayout(sampling)
         for key,label,lo,hi,default in [
@@ -1340,19 +1395,19 @@ class Window(QMainWindow):
         f.addRow('Batch (-b)',spin('batch',1,65536,1024))
         f.addRow('Micro batch (-ub)',spin('ubatch',1,65536,256))
         f.addRow('',check('flash_attn','Flash Attention (-fa on)'))
-        f.addRow('',check('no_kv_offload','KV cache в RAM (--no-kv-offload)'))
+        f.addRow('',check('no_kv_offload',T('KV cache в RAM (--no-kv-offload)')))
         cache_options=['q8_0','f16','q4_0','q4_1','q5_0','q5_1','iq4_nl']
         f.addRow('KV K',combo('cache_type_k',cache_options))
         f.addRow('KV V',combo('cache_type_v',cache_options))
-        self.editor_scroll_tab('Память / KV',memory)
+        self.editor_scroll_tab(T('Память / KV'),memory)
 
         multi_tab=QWidget(); f=QFormLayout(multi_tab)
         f.addRow('MMProj GGUF',text('mmproj'))
         f.addRow('Image min tokens',spin('image_min_tokens',0,65535,0))
-        f.addRow('',check('thinking_off','Отключить thinking (если поддерживается)'))
-        f.addRow('',check('jinja','Использовать --jinja'))
-        f.addRow('',check('reasoning_off','Использовать --reasoning off'))
-        self.editor_scroll_tab('Мультимодальность',multi_tab)
+        f.addRow('',check('thinking_off',T('Отключить thinking (если поддерживается)')))
+        f.addRow('',check('jinja',T('Использовать --jinja')))
+        f.addRow('',check('reasoning_off',T('Использовать --reasoning off')))
+        self.editor_scroll_tab(T('Мультимодальность'),multi_tab)
 
         for widget in ef.values():
             if isinstance(widget,(QLineEdit, QPlainTextEdit)):
@@ -1369,12 +1424,12 @@ class Window(QMainWindow):
     def populate_gpu_choices(self):
         picker = self.edit_fields['gpu']
         picker.clear()
-        picker.addItem('Авто (llama.cpp выберет GPU)', '')
+        picker.addItem(T('Авто (llama.cpp выберет GPU)'), '')
         for entry in multi.gpu_inventory():
             idx, name, uuid, memory = entry['index'], entry['name'], entry['uuid'], entry['memory']
             picker.addItem(f"GPU {idx}: {name} ({memory}) · {uuid}", uuid)
-            picker.setItemData(picker.count() - 1, 'Назначить только этот GPU по UUID', Qt.ItemDataRole.ToolTipRole)
-            picker.addItem(f"GPU {idx}: индекс {idx} (менее стабильно)", str(idx))
+            picker.setItemData(picker.count() - 1, T('Назначить только этот GPU по UUID'), Qt.ItemDataRole.ToolTipRole)
+            picker.addItem(T(f"GPU {idx}: индекс {idx} (менее стабильно)"), str(idx))
 
     def refresh_gpu_inventory(self):
         selected = self.editor_gpu_value()
@@ -1384,7 +1439,7 @@ class Window(QMainWindow):
             self.edit_fields['gpu'].setCurrentIndex(index)
         else:
             self.edit_fields['gpu'].setEditText(selected)
-        self.gpu_info.setPlainText('\n'.join(multi.available_gpu_ids()) or 'GPU не обнаружены через nvidia-smi')
+        self.gpu_info.setPlainText('\n'.join(multi.available_gpu_ids()) or T('GPU не обнаружены через nvidia-smi'))
 
     def editor_gpu_value(self):
         picker = self.edit_fields['gpu']
@@ -1445,14 +1500,14 @@ class Window(QMainWindow):
             set_line('extra_args', extra if isinstance(extra,str) else ' '.join(extra))
             self.editor_current_alias=alias
             self.editor_dirty=False
-            self.editor_hint.setText('Профиль загружен · настройки сохранены только после кнопки')
+            self.editor_hint.setText(T('Профиль загружен · настройки сохранены только после кнопки'))
         finally:
             self.editor_loading=False
 
     def mark_editor_dirty(self,*_):
         if self.editor_loading or not self.editor_current_alias: return
         self.editor_dirty=True
-        self.editor_hint.setText('● Есть несохранённые изменения')
+        self.editor_hint.setText(T('● Есть несохранённые изменения'))
         if self.autosave_checkbox.isChecked(): self.auto_timer.start(800)
 
     def toggle_autosave(self,*_):
@@ -1465,11 +1520,11 @@ class Window(QMainWindow):
 
     def confirm_discard_or_save(self):
         dialog=QMessageBox(self)
-        dialog.setWindowTitle('Несохранённый профиль')
-        dialog.setText('Сохранить изменения перед переключением модели?')
-        yes=dialog.addButton('Сохранить',QMessageBox.ButtonRole.AcceptRole)
-        no=dialog.addButton('Не сохранять',QMessageBox.ButtonRole.DestructiveRole)
-        cancel=dialog.addButton('Отмена',QMessageBox.ButtonRole.RejectRole)
+        dialog.setWindowTitle(T('Несохранённый профиль'))
+        dialog.setText(T('Сохранить изменения перед переключением модели?'))
+        yes=dialog.addButton(T('Сохранить'),QMessageBox.ButtonRole.AcceptRole)
+        no=dialog.addButton(T('Не сохранять'),QMessageBox.ButtonRole.DestructiveRole)
+        cancel=dialog.addButton(T('Отмена'),QMessageBox.ButtonRole.RejectRole)
         dialog.exec()
         if dialog.clickedButton()==yes: return self.save_current_model(silent=True)
         if dialog.clickedButton()==no: self.editor_dirty=False;return True
@@ -1487,7 +1542,7 @@ class Window(QMainWindow):
         profile['id']=alias
         profile['preferred_client'] = str(ef['preferred_client'].currentData())
         if profile['preferred_client'] not in client_launcher.CLIENTS:
-            raise ValueError('Неподдерживаемый агентный клиент')
+            raise ValueError(T('Неподдерживаемый агентный клиент'))
         for k in ('context','port','ngl','n_cpu_moe','parallel','batch','ubatch','image_min_tokens'):
             profile[k]=int(ef[k].value())
         for k in ('flash_attn','no_kv_offload','thinking_off','jinja','reasoning_off'):
@@ -1497,9 +1552,9 @@ class Window(QMainWindow):
         # Validate, but don't require file existence during editing/import.
         multi.port_of(profile); multi.gpu_of(profile)
         if not profile['path'] and not profile['match']:
-            raise ValueError('Укажи путь к GGUF или шаблон для поиска')
+            raise ValueError(T('Укажи путь к GGUF или шаблон для поиска'))
         if profile['ubatch']>profile['batch']:
-            raise ValueError('Micro batch не может быть больше batch')
+            raise ValueError(T('Micro batch не может быть больше batch'))
         return profile
 
     def persist_profiles(self):
@@ -1523,30 +1578,30 @@ class Window(QMainWindow):
         try:
             updated=self.collect_editor_model()
             if updated['id']!=alias and multi.inspect(alias).get('managed'):
-                raise ValueError('Нельзя менять alias работающей модели — сначала останови её')
+                raise ValueError(T('Нельзя менять alias работающей модели — сначала останови её'))
             if any(p['id']==updated['id'] and p['id']!=alias for p in self.cfg.get('models',[])):
-                raise ValueError('Этот ID уже используется')
+                raise ValueError(T('Этот ID уже используется'))
             new_models=[updated if p['id']==alias else p for p in self.cfg.get('models',[])]
             if len(new_models)!=len(self.cfg.get('models',[])):
-                raise ValueError('Исходный профиль не найден')
+                raise ValueError(T('Исходный профиль не найден'))
             obj={**self.cfg,'models':new_models}
             self.cfg=obj
             self.persist_profiles()
             self.editor_dirty=False;self.editor_current_alias=updated['id']
             self.populate_settings_tree();self.populate_model_tree()
             self.select_alias_in_trees(updated['id'])
-            self.editor_hint.setText('✓ Профиль сохранён в models.json')
-            if not silent: QMessageBox.information(self,'Профиль','Изменения сохранены. Для уже запущенной модели применятся после перезапуска.')
+            self.editor_hint.setText(T('✓ Профиль сохранён в models.json'))
+            if not silent: QMessageBox.information(self,T('Профиль'),T('Изменения сохранены. Для уже запущенной модели применятся после перезапуска.'))
             return True
         except Exception as exc:
-            QMessageBox.warning(self,'Ошибка профиля',str(exc))
+            QMessageBox.warning(self,T('Ошибка профиля'),str(exc))
             return False
 
     def next_port(self):
         used={int(p.get('port',8080)) for p in self.cfg.get('models',[])}
         for port in range(8081,8400):
             if port not in used and not core.port_open(port): return port
-        raise RuntimeError('Нет свободного порта для нового профиля')
+        raise RuntimeError(T('Нет свободного порта для нового профиля'))
 
     def unique_alias(self,base):
         ids={p['id'] for p in self.cfg.get('models',[])}
@@ -1558,7 +1613,7 @@ class Window(QMainWindow):
     def add_model(self):
         if self.editor_dirty and not self.confirm_discard_or_save(): return
         alias=self.unique_alias('new-model')
-        profile={'id':alias,'name':'Новая модель','purpose':'Укажи назначение','context':32768,
+        profile={'id':alias,'name':T('Новая модель'),'purpose':T('Укажи назначение'),'context':32768,
                  'port':self.next_port(),'gpu':'','path':'','match':'*.gguf',
                  'preferred_client':'pi',
                  'sampling':{'temp':.7,'top_p':.8,'top_k':20,'min_p':0,'repeat_penalty':1}}
@@ -1576,14 +1631,14 @@ class Window(QMainWindow):
         if not original:return
         clone=json.loads(json.dumps(original))
         clone['id']=self.unique_alias(original['id']+'-copy')
-        clone['name']=original.get('name',original['id'])+' (копия)'
+        clone['name']=original.get('name',original['id'])+T(' (копия)')
         clone['port']=self.next_port()
         self.cfg['models'].append(clone)
         self.persist_profiles()
         self.populate_settings_tree();self.populate_model_tree()
         self.select_alias_in_trees(clone['id'])
         self.tabs.setCurrentIndex(4)
-        QMessageBox.information(self,'Копия модели',f"Создан {clone['id']} на порту {clone['port']}.\nПроверь GPU: сейчас он скопирован из исходного профиля.")
+        QMessageBox.information(self,T('Копия модели'),T(f"Создан {clone['id']} на порту {clone['port']}.\nПроверь GPU: сейчас он скопирован из исходного профиля."))
 
     def delete_model(self):
         items=self.settings_tree.selectedItems()
@@ -1598,14 +1653,14 @@ class Window(QMainWindow):
                 self.settings_tree.setCurrentItem(self.settings_tree.topLevelItem(0))
         state=multi.inspect(alias)
         if state.get('managed') and state.get('alive'):
-            answer=QMessageBox.question(self,'Удаление работающей модели',
-                f'Модель {alias} работает. Сначала остановить её, затем удалить профиль?\nРаботающие другие модели не пострадают.')
+            answer=QMessageBox.question(self,T('Удаление работающей модели'),
+                T(f'Модель {alias} работает. Сначала остановить её, затем удалить профиль?\nРаботающие другие модели не пострадают.'))
             if answer==QMessageBox.StandardButton.Yes:
-                self.async_call('Остановка перед удалением '+alias,
+                self.async_call(T('Остановка перед удалением ')+alias,
                                 lambda:multi.stop(alias),
                                 after=lambda ok,txt:actual_delete() if ok and not multi.inspect(alias).get('alive') else None)
             return
-        if QMessageBox.question(self,'Удаление',f'Удалить профиль {alias}? GGUF-файл останется на диске.')==QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self,T('Удаление'),T(f'Удалить профиль {alias}? GGUF-файл останется на диске.'))==QMessageBox.StandardButton.Yes:
             actual_delete()
 
     def select_tree_alias(self,tree,alias):
@@ -1627,7 +1682,7 @@ class Window(QMainWindow):
 
     def browse_client_workspace(self):
         current = self.set_inputs['client_workspace'].text().strip() or str(Path.home())
-        chosen = QFileDialog.getExistingDirectory(self, 'Рабочая папка клиентов OpenCode и Pi', current)
+        chosen = QFileDialog.getExistingDirectory(self, T('Рабочая папка клиентов OpenCode и Pi'), current)
         if chosen:
             self.set_inputs['client_workspace'].setText(chosen)
 
@@ -1642,7 +1697,7 @@ class Window(QMainWindow):
         self.settings_data = data
         self.apply_retention_cleanup(startup=True)
         self.refresh_reports()
-        QMessageBox.information(self, 'Настройки', 'Настройки программы сохранены. Профили сохраняются отдельно.')
+        QMessageBox.information(self, T('Настройки'), T('Настройки программы сохранены. Профили сохраняются отдельно.'))
 
     # ---------- Status and logs ----------
     def append_log(self,text):
@@ -1683,20 +1738,20 @@ class Window(QMainWindow):
         all_gpus = core.all_gpu_metrics()
         details = [f"GPU {g['index']}: {g['gpu']:.0f}% · VRAM {g['vram']/1024:.1f}/{g['vram_total']/1024:.1f} GiB · {g['temp']:.0f}°C · {g['power']:.0f} W"
                    for g in all_gpus]
-        if not details: details = ['Нет данных NVIDIA']
+        if not details: details = [T('Нет данных NVIDIA')]
         details.append(f"RAM {ram.get('ram',0):.1f}/{ram.get('ram_total',0):.1f} GiB · Swap {ram.get('swap',0):.1f} GiB")
         self.metrics_label.setText('\n'.join(details))
         state=core.get_status()
-        names={'webui':'работает' if state['webui'] else 'не отвечает',
-               'office':'управляемый' if state['office'] else 'не подтверждён',
-               'comfy':'работает' if state['comfy'] else 'не отвечает'}
+        names={'webui':T('работает') if state['webui'] else T('не отвечает'),
+               'office':T('управляемый') if state['office'] else T('не подтверждён'),
+               'comfy':T('работает') if state['comfy'] else T('не отвечает')}
         for sid,lab in self.service_labels.items():
             lab.setText(names.get(sid,'—'))
             active=(sid=='webui' and state['webui']) or (sid=='office' and state['office']) or (sid=='comfy' and state['comfy'])
             lab.setStyleSheet('color: #63d6ac;' if active else 'color: #e9b5a0;')
         running=[k for k,v in multi.all_states().items() if v.get('state')=='running' and v.get('managed')]
-        self.setWindowTitle(f'AI Model Lab — KDE · работающих моделей: {len(running)}')
-        self.status_label.setText('Работают: '+(', '.join(running) if running else 'нет'))
+        self.setWindowTitle(T(f'AI Model Lab — KDE · работающих моделей: {len(running)}'))
+        self.status_label.setText(T('Работают: ')+(', '.join(running) if running else T('нет')))
         self.update_model_status_cells()
         self.update_instances_table()
         self.refresh_model_action_button()
@@ -1705,36 +1760,36 @@ class Window(QMainWindow):
     def closeEvent(self,event):
         if self.exit_requested:
             if any(job.isRunning() for job in self.jobs):
-                QMessageBox.information(self,'Идёт операция','Дождись завершения загрузки или остановки серверов. Можно свернуть программу в трей.')
+                QMessageBox.information(self,T('Идёт операция'),T('Дождись завершения загрузки или остановки серверов. Можно свернуть программу в трей.'))
                 self.exit_requested=False;event.ignore();return
             if self.editor_dirty and not self.confirm_discard_or_save():
                 self.exit_requested=False;event.ignore();return
             if self.proc and self.proc.state()!=QProcess.ProcessState.NotRunning:
-                QMessageBox.information(self,'Активный тест','Сначала останови активное испытание.')
+                QMessageBox.information(self,T('Активный тест'),T('Сначала останови активное испытание.'))
                 self.exit_requested=False;event.ignore();return
             if self.tray:self.tray.hide()
             event.accept();return
         dialog=QMessageBox(self)
-        dialog.setWindowTitle('Закрыть AI Model Lab?')
-        dialog.setText('Как закрыть приложение? Работающие серверы не будут остановлены автоматически.')
+        dialog.setWindowTitle(T('Закрыть AI Model Lab?'))
+        dialog.setText(T('Как закрыть приложение? Работающие серверы не будут остановлены автоматически.'))
         tray_btn=None
         if self.tray and self.tray.isVisible():
-            tray_btn=dialog.addButton('Свернуть в трей',QMessageBox.ButtonRole.AcceptRole)
-        exit_btn=dialog.addButton('Закрыть приложение (серверы оставить)',QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn=dialog.addButton('Отмена',QMessageBox.ButtonRole.RejectRole)
+            tray_btn=dialog.addButton(T('Свернуть в трей'),QMessageBox.ButtonRole.AcceptRole)
+        exit_btn=dialog.addButton(T('Закрыть приложение (серверы оставить)'),QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn=dialog.addButton(T('Отмена'),QMessageBox.ButtonRole.RejectRole)
         dialog.exec()
         clicked=dialog.clickedButton()
         if tray_btn and clicked==tray_btn:
             event.ignore();self.hide()
-            self.tray.showMessage('AI Model Lab','Приложение работает в трее; серверы продолжают работу.',QSystemTrayIcon.MessageIcon.Information,3000)
+            self.tray.showMessage('AI Model Lab',T('Приложение работает в трее; серверы продолжают работу.'),QSystemTrayIcon.MessageIcon.Information,3000)
         elif clicked==exit_btn:
             if any(job.isRunning() for job in self.jobs):
-                QMessageBox.information(self,'Идёт операция','Пока идёт операция, приложение можно свернуть в трей.')
+                QMessageBox.information(self,T('Идёт операция'),T('Пока идёт операция, приложение можно свернуть в трей.'))
                 event.ignore();return
             if self.editor_dirty and not self.confirm_discard_or_save():
                 event.ignore();return
             if self.proc and self.proc.state()!=QProcess.ProcessState.NotRunning:
-                QMessageBox.information(self,'Активный тест','Сначала останови активное испытание.')
+                QMessageBox.information(self,T('Активный тест'),T('Сначала останови активное испытание.'))
                 event.ignore();return
             self.exit_requested=True
             if self.tray:self.tray.hide()
@@ -1747,6 +1802,7 @@ def main():
     app.setApplicationName('AI Model Lab')
     app.setOrganizationName('AI Model Lab Local')
     window = Window()
+    app._ai_lab_window = window
     window.show()
     sys.exit(app.exec())
 
