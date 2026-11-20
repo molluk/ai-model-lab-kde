@@ -19,7 +19,7 @@ if [[ -f "$DEST/gui.py" ]]; then
 fi
 
 # Preserve existing profiles and reports when upgrading.
-for name in core.py multi.py gui.py bench.py client_launcher.py i18n.py custom_services.py shutdown_manager.py release_preflight.py run.sh README.md README_RU.md LICENSE NOTICE LICENSING_HISTORY.md; do
+for name in core.py multi.py gui.py bench.py client_launcher.py i18n.py custom_services.py shutdown_manager.py release_preflight.py run.sh README.md LICENSE NOTICE; do
   install -m 0644 "$SOURCE/$name" "$DEST/$name"
 done
 install -m 0755 "$SOURCE/install.sh" "$DEST/install.sh"
@@ -40,8 +40,12 @@ done
 if [[ ! -f "$DEST/services.json" ]]; then
   install -m 0600 "$SOURCE/services.example.json" "$DEST/services.json"
 fi
-mkdir -p "$DEST/benchmarks/prompts" "$DEST/benchmarks/extensions" "$DEST/tests" "$DEST/assets" "$DEST/locales"
-install -m 0644 "$SOURCE/benchmarks/README.md" "$DEST/benchmarks/README.md"
+mkdir -p "$DEST/benchmarks/prompts" "$DEST/benchmarks/extensions" "$DEST/tests" "$DEST/assets" "$DEST/locales" "$DEST/docs"
+# Install consolidated documentation without changing user profiles or reports.
+for doc in "$SOURCE"/docs/*.md; do
+  [[ -f "$doc" ]] || continue
+  install -m 0644 "$doc" "$DEST/docs/$(basename "$doc")"
+done
 if compgen -G "$SOURCE/locales/*.json" >/dev/null; then install -m 0644 "$SOURCE/locales/"*.json "$DEST/locales/"; fi
 if compgen -G "$SOURCE/benchmarks/prompts/*.md" >/dev/null; then
   install -m 0644 "$SOURCE/benchmarks/prompts/"*.md "$DEST/benchmarks/prompts/"

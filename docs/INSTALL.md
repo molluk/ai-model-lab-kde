@@ -1,6 +1,6 @@
 # Installation and use (English)
 
-[Русский](INSTALL_RU.md) · [Home](README.md)
+[Русский](INSTALL_RU.md) · [Home](../README.md)
 
 ## 1. Prepare the host
 
@@ -52,7 +52,7 @@ The client launcher targets the selected local API address and normally leaves y
 
 ## 6. Benchmarks and reports
 
-Use the **Tests** tab for API speed, numerical QA, synthetic long context, and sample Android tasks. Output is written under `data/reports`; logs under `data/logs`. See `benchmarks/README.md`. Some Android agent runs require a configured Pi installation and a matching model endpoint/context. Read-only tool restrictions do not constitute an OS sandbox.
+Use the **Tests** tab for API speed, numerical QA, synthetic long context, and sample Android tasks. Output is written under `data/reports`; logs under `data/logs`. See [benchmarks documentation](BENCHMARKS.md). Some Android agent runs require a configured Pi installation and a matching model endpoint/context. Read-only tool restrictions do not constitute an OS sandbox.
 
 The old project-specific benchmark prompts are deliberately **not** included in the public release. Comparisons to old private benchmark runs are not equivalent.
 

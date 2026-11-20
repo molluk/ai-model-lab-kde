@@ -26,7 +26,7 @@ class ServicesUITest(unittest.TestCase):
         self.assertIn('PolyForm Noncommercial License 1.0.0', license_text)
         self.assertIn('Noncommercial Purposes', license_text)
         self.assertTrue(any(line.startswith('Required Notice:') for line in notice.splitlines()))
-        self.assertTrue((ROOT / 'LICENSING_HISTORY.md').is_file())
+        self.assertTrue((ROOT / 'docs' / 'LICENSING_HISTORY.md').is_file())
 
     def test_install_preserves_custom_profiles(self):
         install = (ROOT / 'install.sh').read_text(encoding='utf-8')

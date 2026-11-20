@@ -1,84 +1,72 @@
-# AI Model Lab (KDE) — pre-release source
+# AI Model Lab — local AI workstation manager for KDE
 
-A local Python/Qt6 application for managing independent llama.cpp servers, GPU affinity,
-Open WebUI / Agent Office / ComfyUI, launching Pi or OpenCode, and offline benchmarks.
+**English** · [Русский](docs/README_RU.md) · [Documentation](docs/INDEX.md) · [Changelog](docs/CHANGELOG.md)
 
-**Status:** experimental developer preview, not yet production-hardened.
+AI Model Lab is an experimental desktop application built with **Python and Qt6** for launching, monitoring and testing local language models on Linux. It manages independent [llama.cpp](https://github.com/ggml-org/llama.cpp) servers and integrates optional AI clients and services.
 
-## Environment
+> **Status: Alpha / experimental.** Primarily developed for CachyOS / Arch Linux with KDE Plasma. Other Linux desktops and GPU configurations need validation. This project does **not** bundle model weights, llama.cpp or external AI clients.
 
-- Linux / KDE Plasma, Python 3.11+, Qt6 Python bindings (`pyside6` on Arch/CachyOS).
-- An installed `llama-server` from [llama.cpp](https://github.com/ggml-org/llama.cpp).
-- NVIDIA GPUs require working CUDA drivers and `nvidia-smi` for GPU-specific features.
-- Pi and OpenCode are optional external tools, installed independently.
+## Features
 
-## Install
+- **LLM profiles:** add, edit, clone and remove GGUF configurations; adjust context, sampling, CPU/GPU offload, KV cache and multimodal settings.
+- **Multiple independent servers:** assign a port and NVIDIA GPU index/UUID per profile; run more than one model simultaneously when hardware resources permit.
+- **Local monitoring:** GPU load, VRAM, RAM, process status, live logs and benchmark history.
+- **AI clients:** open a running model with **Pi** or **OpenCode**, keeping per-model client preferences.
+- **Services:** manage compatible Open WebUI, Agent Office and ComfyUI setups, or add custom local services.
+- **Benchmarks:** API throughput, simple QA checks, synthetic context-recall tasks and sample Android code-navigation scenarios; results stay on your machine.
+- **Localization:** Russian and English UI; translation catalogs are extendable.
+- **KDE system tray:** close the GUI while keeping managed servers running, or explicitly stop all owned services when exiting.
+
+Separate models can share a GPU **only if sufficient VRAM/RAM is available**. GPU memory is not automatically pooled, and simultaneous execution is not a guarantee that both models will fit.
+
+## Requirements and quick start
+
+- Linux with **Python 3.11+** and Qt6 Python bindings (Arch/CachyOS package: `pyside6`).
+- A separately installed [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` and GGUF model(s).
+- For NVIDIA-specific features: working drivers, CUDA-compatible setup and `nvidia-smi`.
+- Optional tools such as Pi, OpenCode, Open WebUI, Agent Office and ComfyUI must be installed separately.
+
+On CachyOS / Arch Linux, from the **repository root**:
 
 ```bash
-sudo pacman -S pyside6
+sudo pacman -Syu pyside6
+python3 release_preflight.py
 bash ./install.sh
 ~/.local/bin/ai-model-lab
 ```
 
-`install.sh` copies the app into `${AI_MODEL_LAB_HOME:-$HOME/AI/AI-Model-Lab}`.
-Model files are never copied. When `models.json` / `settings.json` do not exist,
-the installer creates them from the bundled example files. Existing configs
-and reports are preserved across upgrades.
+The installer uses `~/AI/AI-Model-Lab` by default and preserves existing profiles and reports during upgrades. Set GGUF and `llama-server` paths in the application before first use.
 
-## Development and tests
+**Installation guides:** [English](docs/INSTALL.md) · [Русский](docs/INSTALL_RU.md)
+
+## Documentation
+
+All guides and release history are under **[`docs/`](docs/INDEX.md)**:
+
+- [Documentation index (EN / RU)](docs/INDEX.md)
+- [Installation and troubleshooting](docs/INSTALL.md) · [Установка и диагностика](docs/INSTALL_RU.md)
+- [Benchmarks and safety](docs/BENCHMARKS.md) · [Localization / Локализация](docs/LOCALIZATION.md)
+- [Contributing](docs/CONTRIBUTING.md) · [Security](docs/SECURITY.md)
+- [Changelog](docs/CHANGELOG.md) · [Git history provenance](docs/HISTORY_PROVENANCE.md)
+- [License history](docs/LICENSING_HISTORY.md) · [Licensing guide](docs/LICENSING_GUIDE.md)
+
+## Development
 
 ```bash
 python3 release_preflight.py
 python3 -m unittest discover -s tests -v
 ```
 
-The release preflight checks all Python sources and evaluates the Qt stylesheet
-without requiring a graphical environment. UI and CUDA integration still
-need real-device testing.
+Automated tests do not replace validation of the real KDE UI, GPU drivers or CUDA inference.
 
-## Privacy & security
+## Security and privacy
 
-Do not commit `data/`, actual `models.json` or `settings.json`, API keys, private
-Android sources, model weights, or chat history. See [SECURITY.md](SECURITY.md).
+The local Git checkout and installed application must not include private `models.json`, `settings.json`, `services.json`, API tokens, `data/` logs/reports, chat histories, private Android projects or GGUF weights. Pi/OpenCode tool restrictions do **not** provide OS-level filesystem isolation. Do not expose local HTTP APIs to untrusted networks without independent authentication and isolation. See [Security](docs/SECURITY.md).
 
-The public-source P1/P2 Android prompts are generic examples and live under
-`benchmarks/prompts/`. They are **not the same benchmarks** used in private
-Android-project experiments; do not compare scores across these suites as if
-identical. Pi agent tests require separately installed and configured Pi.
+## License and attribution
 
-## License
+Copyright © 2026 **molluk and AI Model Lab contributors**.
 
-**PolyForm Noncommercial License 1.0.0** (see `LICENSE`, `NOTICE`, `LICENSING_HISTORY.md`). Commercial use requires separate authorization from the rightsholder(s). This is source-available, **not** OSI open-source. Trademarks and model weights are not included.
+Distributed under **[PolyForm Noncommercial License 1.0.0](LICENSE)**; see [NOTICE](NOTICE) and [licensing history](docs/LICENSING_HISTORY.md). **Commercial use requires separate permission from the rightsholder(s).** This is **source-available, not OSI-defined Open Source**.
 
-## Languages (v3.8)
-
-The top bar now includes a language selector next to **Refresh**:
-**Русский / English**. The selection is saved in `settings.json` under
-`"language"`, and the window is rebuilt without stopping detached model
-servers. Finish a benchmark or model start/stop operation before changing
-language. Model responses, logs, benchmark outputs, and user-defined profile
-names are not translated.
-
-Translation catalogs live in `locales/`. See `locales/README.md` to add other
-languages; missing translations fall back to Russian.
-
-**Licensing history note:** previous archived versions may have been provided under MIT. Changing the current license does not retroactively revoke prior MIT rights. See `LICENSING_HISTORY.md`.
-
-
-## User-defined AI services (v3.9)
-
-The **Management** tab supports custom local services. Click **Add service** to
-configure a unique ID, display name, an argv-style launch command (no shell),
-working directory, optional loopback health-check URL, and optional browser URL.
-Each custom service has one Start/Stop button that changes with its state.
-Only the exact process launched by AI Model Lab can be stopped from the GUI;
-unrelated system processes are never killed by name. Profiles are stored in
-`services.json`, and runtime metadata/logs in `data/`.
-
-**Security:** entering a command grants it your Linux user privileges. Use only
-commands you trust. Do not put secrets in command-line arguments; they can be
-visible to other local users through process listings.
-
-### Exit modes (v3.10)
-
-Closing the KDE window offers **Minimize to tray**, **Exit (keep servers running)**, **Exit and stop all managed services**, and **Cancel**. Full exit gracefully stops only owned llama.cpp instances, user-created AI services, managed Agent Office/ComfyUI processes, and the configured user-systemd WebUI unit. External processes and independently launched Pi/OpenCode sessions are not terminated. If an owned service fails to stop, the window remains open and reports the error.
+The public Git history is reconstructed from release archives and disclosed as such in [HISTORY_PROVENANCE.md](docs/HISTORY_PROVENANCE.md). Separately supplied older copies may retain the rights originally granted to their recipients.
