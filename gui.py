@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.5 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE v3.6 — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
@@ -49,13 +49,13 @@ QLabel#Subheader {{ font-size:13px;color:{COLORS['muted']}; }}
 QGroupBox {{ border:1px solid {COLORS['line']};border-radius:10px;margin-top:16px;padding:12px;
            background:{COLORS['surface']};font-weight:600; }}
 QGroupBox::title {{ subcontrol-origin:margin;left:12px;padding:0 6px; }}
-QPushButton {{ background:{COLORS['panel']};border:1px solid {COLORS['line']};
+QPushButton,QToolButton {{ background:{COLORS['panel']};border:1px solid {COLORS['line']};
              padding:8px 13px;border-radius:7px;min-height:21px; }}
-QPushButton:hover {{ background:#324563;border-color:{COLORS['accent']}; }}
-QPushButton:disabled {{ color:#6e7d93;background:#202736;border-color:#253449; }}
+QPushButton:hover,QToolButton:hover {{ background:#324563;border-color:{COLORS['accent']}; }}
+QPushButton:disabled,QToolButton:disabled {{ color:#6e7d93;background:#202736;border-color:#253449; }}
 QPushButton#Primary {{ background:#245e9a;border:1px solid #438de1;font-weight:700; }}
-QPushButton#Danger { background:#63333b;border:1px solid #ae5364; }
-QPushButton#Slim { padding:5px 10px; min-height:18px; font-size:12px; border-radius:6px; }
+QPushButton#Danger {{ background:#63333b;border:1px solid #ae5364; }}
+QPushButton#Slim {{ padding:5px 10px; min-height:18px; font-size:12px; border-radius:6px; }}
 QTabWidget::pane {{ border:1px solid {COLORS['line']};border-radius:8px; }}
 QTabBar::tab {{ padding:11px 17px;background:{COLORS['surface']};color:{COLORS['muted']}; }}
 QTabBar::tab:selected {{ color:white;background:#2a405c;border-bottom:2px solid #62a9ff; }}
@@ -398,6 +398,20 @@ class Window(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, 'API модели', str(exc))
 
+    def open_preferred_client(self):
+        profile = self.selected_model_profile()
+        if profile:
+            self.open_model_client(client_launcher.preferred_client(profile))
+
+    def refresh_preferred_client_button(self):
+        if not hasattr(self, 'client_menu_button'):
+            return
+        profile = self.selected_model_profile()
+        preferred = client_launcher.preferred_client(profile)
+        title = {'pi': 'Pi', 'opencode': 'OpenCode'}.get(preferred, preferred)
+        self.client_menu_button.setText(f'⌘ Открыть в {title}   ▾')
+        self.client_menu_button.setToolTip(f'Основной клиент для этой модели: {title}. Стрелка справа открывает альтернативы.')
+
     def open_model_client(self, client):
         alias = self.selected_alias()
         if not alias:
@@ -563,9 +577,10 @@ class Window(QMainWindow):
         self.model_action_btn.clicked.connect(self.model_action)
         f.addWidget(self.model_action_btn)
         self.client_menu_button = QToolButton()
-        self.client_menu_button.setText('⌘ Открыть выбранную модель в…   ▾')
-        self.client_menu_button.setToolTip('Открыть работающую модель в нужном клиенте. Порт и alias будут переданы автоматически.')
-        self.client_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.client_menu_button.setText('⌘ Открыть в Pi   ▾')
+        self.client_menu_button.setToolTip('Щелчок запускает предпочтительный клиент модели; стрелка справа — другой клиент.')
+        self.client_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.client_menu_button.clicked.connect(self.open_preferred_client)
         self.client_menu_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         menu = QMenu(self.client_menu_button)
         menu.addAction('OpenCode — агент разработки', lambda: self.open_model_client('opencode'))
@@ -656,13 +671,14 @@ class Window(QMainWindow):
         state = multi.inspect(p['id'])
         self.model_info.setPlainText(
             f"{p['name']}\n\nНазначение: {p.get('purpose', '—')}\n"
-            f"Alias: {p['id']}\nКонтекст: {int(p['context']):,} токенов\n"
+            f"Alias: {p['id']}\nКлиент по умолчанию: {client_launcher.preferred_client(p)}\nКонтекст: {int(p['context']):,} токенов\n"
             f"GPU: {p.get('gpu') or 'автоматически'} · порт API: {p.get('port', 8080)}\n"
             f"Статус: {state.get('state')}\n"
             f"KV: {p.get('cache_type_k','q8_0')} / {p.get('cache_type_v','q8_0')}\n\n"
             f"{presence}\n{path}")
         self.reset_log_view()
         self.refresh_model_action_button()
+        self.refresh_preferred_client_button()
 
     def refresh_model_action_button(self):
         selected = self.selected_alias()
@@ -1151,6 +1167,10 @@ class Window(QMainWindow):
 
         basic=QWidget(); f=QFormLayout(basic)
         f.addRow('ID / alias',text('id')); f.addRow('Название',text('name'))
+        ef['preferred_client'] = QComboBox()
+        ef['preferred_client'].addItem('Pi — легковесный агент', 'pi')
+        ef['preferred_client'].addItem('OpenCode — агент разработки', 'opencode')
+        f.addRow('Клиент по умолчанию', ef['preferred_client'])
         ef['purpose']=QPlainTextEdit(); ef['purpose'].setMaximumHeight(90); f.addRow('Назначение',ef['purpose'])
         f.addRow('Контекст (токены)',spin('context',4096,524288,32768))
         f.addRow('Порт API',spin('port',1024,65535,8080))
@@ -1274,6 +1294,9 @@ class Window(QMainWindow):
             else:
                 ef['gpu'].setEditText(current_gpu)
             ef['purpose'].setPlainText(profile.get('purpose',''))
+            preferred = client_launcher.preferred_client(profile)
+            choice = ef['preferred_client'].findData(preferred)
+            ef['preferred_client'].setCurrentIndex(max(choice, 0))
             for key,default in [('context',32768),('port',8080),('ngl',99),('n_cpu_moe',0),('parallel',1),
                                 ('batch',1024),('ubatch',256),('image_min_tokens',0)]:
                 ef[key].setValue(int(profile.get(key,default) or default) if key not in ('n_cpu_moe','image_min_tokens') else int(profile.get(key,0) or 0))
@@ -1329,6 +1352,9 @@ class Window(QMainWindow):
             profile[k]=value
         profile['gpu'] = self.editor_gpu_value()
         profile['id']=alias
+        profile['preferred_client'] = str(ef['preferred_client'].currentData())
+        if profile['preferred_client'] not in client_launcher.CLIENTS:
+            raise ValueError('Неподдерживаемый агентный клиент')
         for k in ('context','port','ngl','n_cpu_moe','parallel','batch','ubatch','image_min_tokens'):
             profile[k]=int(ef[k].value())
         for k in ('flash_attn','no_kv_offload','thinking_off','jinja','reasoning_off'):
@@ -1401,6 +1427,7 @@ class Window(QMainWindow):
         alias=self.unique_alias('new-model')
         profile={'id':alias,'name':'Новая модель','purpose':'Укажи назначение','context':32768,
                  'port':self.next_port(),'gpu':'','path':'','match':'*.gguf',
+                 'preferred_client':'pi',
                  'sampling':{'temp':.7,'top_p':.8,'top_k':20,'min_p':0,'repeat_penalty':1}}
         self.cfg['models'].append(profile)
         self.persist_profiles()

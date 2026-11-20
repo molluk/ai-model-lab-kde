@@ -2,6 +2,8 @@
 # Offline, no root; installs all source and benchmarks into a single folder.
 set -Eeuo pipefail
 SOURCE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# Validate before touching an existing installation.
+/usr/bin/env python3 "$SOURCE/release_preflight.py"
 DEST="${AI_MODEL_LAB_HOME:-$HOME/AI/AI-Model-Lab}"
 mkdir -p "$DEST" "$HOME/.local/bin" "$HOME/.local/share/applications"
 
@@ -17,16 +19,24 @@ if [[ -f "$DEST/gui.py" ]]; then
 fi
 
 # Preserve existing profiles and reports when upgrading.
-for name in core.py multi.py gui.py bench.py client_launcher.py run.sh README_RU.md; do
+for name in core.py multi.py gui.py bench.py client_launcher.py release_preflight.py run.sh README_RU.md; do
   install -m 0644 "$SOURCE/$name" "$DEST/$name"
 done
 install -m 0755 "$SOURCE/install.sh" "$DEST/install.sh"
 for name in models.json settings.json; do
-  if [[ ! -f "$DEST/$name" ]]; then install -m 0600 "$SOURCE/$name" "$DEST/$name"; fi
+  if [[ ! -f "$DEST/$name" ]]; then
+    if [[ -f "$SOURCE/$name" ]]; then
+      install -m 0600 "$SOURCE/$name" "$DEST/$name"
+    else
+      install -m 0600 "$SOURCE/${name%.json}.example.json" "$DEST/$name"
+    fi
+  fi
 done
 mkdir -p "$DEST/benchmarks/prompts" "$DEST/benchmarks/extensions" "$DEST/tests" "$DEST/assets"
 install -m 0644 "$SOURCE/benchmarks/README.md" "$DEST/benchmarks/README.md"
-install -m 0644 "$SOURCE/benchmarks/prompts/"*.md "$DEST/benchmarks/prompts/"
+if compgen -G "$SOURCE/benchmarks/prompts/*.md" >/dev/null; then
+  install -m 0644 "$SOURCE/benchmarks/prompts/"*.md "$DEST/benchmarks/prompts/"
+fi
 install -m 0644 "$SOURCE/benchmarks/extensions/"*.js "$DEST/benchmarks/extensions/"
 install -m 0644 "$SOURCE/tests/"test_*.py "$DEST/tests/"
 if compgen -G "$SOURCE/assets/*.svg" >/dev/null; then install -m 0644 "$SOURCE/assets/"*.svg "$DEST/assets/"; fi

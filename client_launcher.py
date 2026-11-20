@@ -21,6 +21,16 @@ import multi
 CLIENTS = ('opencode', 'pi')
 
 
+def preferred_client(profile):
+    """Return preferred client for a profile, with a legacy-safe fallback."""
+    profile = profile or {}
+    choice = profile.get('preferred_client')
+    if choice in CLIENTS:
+        return choice
+    alias = str(profile.get('id', '')).lower()
+    return 'opencode' if 'coder' in alias or 'devstral' in alias else 'pi'
+
+
 def find_executable(name):
     resolved = shutil.which(name)
     candidates = [resolved, core.HOME / '.local/bin' / name,

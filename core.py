@@ -49,11 +49,13 @@ def atomic_json(path, data):
 
 
 def config():
-    return load_json(MODELS, {})
+    source = MODELS if MODELS.is_file() else ROOT / 'models.example.json'
+    return load_json(source, {})
 
 
 def settings():
-    return load_json(SETTINGS, {})
+    source = SETTINGS if SETTINGS.is_file() else ROOT / 'settings.example.json'
+    return load_json(source, {})
 
 
 def model_by_id(alias):

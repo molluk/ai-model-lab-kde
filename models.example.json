@@ -1,0 +1,19 @@
+{
+  "version": "3.6",
+  "model_root": "~/AI/models",
+  "server_bin": "~/llama.cpp/build/bin/llama-server",
+  "models": [
+    {
+      "id": "example-model",
+      "name": "Example GGUF model",
+      "purpose": "Example local model",
+      "path": "",
+      "match": "*.gguf",
+      "context": 8192,
+      "port": 8080,
+      "gpu": "",
+      "thinking_off": false,
+      "preferred_client": "pi"
+    }
+  ]
+}

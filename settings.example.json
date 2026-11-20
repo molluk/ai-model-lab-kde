@@ -1,0 +1,15 @@
+{
+  "android_project": "",
+  "office_dir": "~/AI/agent-office",
+  "office_url": "",
+  "comfy_dir": "~/AI/ComfyUI",
+  "webui_service": "open-webui.service",
+  "api_host": "127.0.0.1",
+  "api_port": 8080,
+  "gpu_index": 0,
+  "tool_budget": 24,
+  "benchmark_timeout": 1800,
+  "client_workspace": "~",
+  "logs_retention_days": 30,
+  "reports_retention_days": 90
+}
