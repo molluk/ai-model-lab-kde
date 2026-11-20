@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.4 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE v3.5 — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
+import shutil
+import subprocess
 from pathlib import Path
 from collections import deque
 
@@ -14,7 +16,7 @@ try:
         QHBoxLayout, QGridLayout, QTabWidget, QTreeWidget, QTreeWidgetItem, QGroupBox,
         QComboBox, QLineEdit, QSpinBox, QFileDialog, QMessageBox, QTextEdit, QSplitter,
         QTableWidget, QTableWidgetItem, QHeaderView, QFormLayout, QAbstractItemView,
-        QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle
+        QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle, QToolButton
     )
     from PySide6.QtCore import QUrl
 except ImportError:
@@ -26,7 +28,7 @@ except ImportError:
             QHBoxLayout, QGridLayout, QTabWidget, QTreeWidget, QTreeWidgetItem, QGroupBox,
             QComboBox, QLineEdit, QSpinBox, QFileDialog, QMessageBox, QTextEdit, QSplitter,
             QTableWidget, QTableWidgetItem, QHeaderView, QFormLayout, QAbstractItemView,
-            QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle
+            QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle, QToolButton
         )
     except ImportError:
         print('Нужен Qt6 Python. В CachyOS: sudo pacman -S pyside6', file=sys.stderr)
@@ -34,6 +36,7 @@ except ImportError:
 
 import core
 import multi
+import client_launcher
 
 COLORS = {
     'bg': '#111723', 'surface': '#1a2333', 'panel': '#222d40', 'line': '#33445d', 'text': '#e9f0fb',
@@ -384,6 +387,37 @@ class Window(QMainWindow):
         else:
             QMessageBox.information(self, 'Agent Office', 'Не удалось определить веб-адрес. Укажи office_url в настройках или проверь журнал Agent Office.')
 
+    def copy_selected_api(self):
+        alias = self.selected_alias()
+        if not alias:
+            return
+        try:
+            info = client_launcher.effective_instance(alias)
+            QApplication.clipboard().setText(info['url'])
+            self.set_message('API скопирован: ' + info['url'])
+        except Exception as exc:
+            QMessageBox.warning(self, 'API модели', str(exc))
+
+    def open_model_client(self, client):
+        alias = self.selected_alias()
+        if not alias:
+            return
+        try:
+            info = client_launcher.effective_instance(alias)
+            client_launcher.find_executable(client)
+            folder = client_launcher.workspace_dir()
+            terminal = shutil.which('konsole')
+            if not terminal:
+                raise FileNotFoundError('Не найдена Konsole. Установи её или сообщи используемый терминал.')
+            argv = [terminal, '--noclose', '-e', sys.executable, '-u',
+                    str(core.ROOT / 'client_launcher.py'), '--client', client,
+                    '--model', alias]
+            subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+            self.set_message(f"Открываю {client} → {alias} :{info['port']} · папка {folder}")
+        except Exception as exc:
+            QMessageBox.warning(self, 'Открытие ИИ-клиента', str(exc))
+
     def setup_tray(self):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = None
@@ -528,6 +562,19 @@ class Window(QMainWindow):
         self.model_action_btn = QPushButton('● Статус модели')
         self.model_action_btn.clicked.connect(self.model_action)
         f.addWidget(self.model_action_btn)
+        self.client_menu_button = QToolButton()
+        self.client_menu_button.setText('⌘ Открыть выбранную модель в…   ▾')
+        self.client_menu_button.setToolTip('Открыть работающую модель в нужном клиенте. Порт и alias будут переданы автоматически.')
+        self.client_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.client_menu_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        menu = QMenu(self.client_menu_button)
+        menu.addAction('OpenCode — агент разработки', lambda: self.open_model_client('opencode'))
+        menu.addAction('Pi — агент разработки', lambda: self.open_model_client('pi'))
+        menu.addSeparator()
+        menu.addAction('Скопировать локальный API /v1', self.copy_selected_api)
+        self.client_menu_button.setMenu(menu)
+        self.client_menu_button.setMinimumHeight(34)
+        f.addWidget(self.client_menu_button)
         f.addWidget(btn('✎ Редактировать параметры', self.open_selected_in_editor))
         f.addWidget(btn('🌐 Открыть WebUI', lambda: self.open_url('http://127.0.0.1:3000')))
         f.addWidget(btn('🏢 Открыть Agent Office', self.open_office))
@@ -1018,13 +1065,18 @@ class Window(QMainWindow):
         common_fields = [
             ('android_project','Каталог Android-проекта'),('office_dir','Каталог Agent Office'),
             ('office_url','URL Agent Office'),('comfy_dir','Каталог ComfyUI'),
-            ('webui_service','Служба WebUI'),('gpu_index','GPU для графика nvidia-smi')
+            ('webui_service','Служба WebUI'),('gpu_index','GPU для графика nvidia-smi'),
+            ('client_workspace','Рабочая папка OpenCode / Pi')
         ]
         for row, (key, label) in enumerate(common_fields):
             grid.addWidget(QLabel(label), row, 0)
-            inp = QLineEdit(str(self.settings_data.get(key, '')))
+            inp = QLineEdit(str(self.settings_data.get(key) or (str(Path.home()) if key == 'client_workspace' else '')))
             self.set_inputs[key] = inp
-            grid.addWidget(inp, row, 1, 1, 3)
+            if key == 'client_workspace':
+                grid.addWidget(inp, row, 1, 1, 2)
+                grid.addWidget(slim_btn('Обзор…', self.browse_client_workspace), row, 3)
+            else:
+                grid.addWidget(inp, row, 1, 1, 3)
 
         retain_row = len(common_fields)
         grid.addWidget(QLabel('Хранить логи, дней (0 = без удаления)'), retain_row, 0)
@@ -1412,6 +1464,12 @@ class Window(QMainWindow):
         self.tabs.setCurrentIndex(4)
         self.select_tree_alias(self.settings_tree,alias)
         self.editor_tabs.setCurrentIndex(0)
+
+    def browse_client_workspace(self):
+        current = self.set_inputs['client_workspace'].text().strip() or str(Path.home())
+        chosen = QFileDialog.getExistingDirectory(self, 'Рабочая папка клиентов OpenCode и Pi', current)
+        if chosen:
+            self.set_inputs['client_workspace'].setText(chosen)
 
     def save_all_settings(self):
         data = core.settings()
