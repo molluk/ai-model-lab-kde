@@ -3,6 +3,13 @@
 **Provenance:** the commit history is reconstructed; entries describe observed
 features/changes in the corresponding ZIP, not claims about original commit dates.
 
+## Unreleased — one-click service opening
+- Open WebUI and Agent Office with a single click: start stopped services, wait for HTTP readiness, then open the browser.
+- Choose browser tab or separate window for each service; preferences persist in settings.json.
+- Use the configured user-systemd WebUI unit, or a verified locally installed open-webui CLI when the unit is unavailable.
+- Track and stop Lab-owned CLI WebUI processes on explicit stop/full exit, without touching external processes.
+- Add headless service/browser tests, English translations and packaging checks.
+
 ## v3.10 — Verified full shutdown
 - Add a fourth close-dialog option: Exit and stop all AI Model Lab-managed services.
 - Include managed llama.cpp servers, Agent Office, ComfyUI, systemd-user WebUI, and custom services.

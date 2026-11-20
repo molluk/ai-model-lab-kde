@@ -70,3 +70,27 @@ The old project-specific benchmark prompts are deliberately **not** included in 
 ## 8. Upgrading / uninstalling
 
 Re-run `bash ./install.sh` from a newer release. App sources are updated; local `models.json`, `settings.json` and `data/` remain. The installer backs up selected program files during upgrades. To uninstall, stop managed services first, then remove the installed app folder and its desktop launcher manually **after backing up any profiles/reports you want to keep**.
+
+## Opening WebUI and Agent Office with one click
+
+On the **Models** page, select **In a browser tab** or **In a separate window**
+next to **Open WebUI** / **Open Agent Office**. Each service remembers its own
+preference. The same controls appear under **Management**.
+
+Click **Open** once. If the service is stopped, AI Model Lab starts it, waits
+for the local HTTP interface to respond, then opens the selected browser view.
+If it already runs (including an external process), the application only opens
+it; it does not take ownership of the external process.
+
+**Open WebUI:** configure a `systemd --user` unit or install the
+`open-webui` CLI. If the configured unit is missing, AI Model Lab can start an
+existing CLI on loopback port 3000; it never downloads software automatically.
+**Agent Office:** point `office_dir` at the folder containing `run.py`.
+If its URL cannot be discovered from the managed process log, set `office_url`
+to the actual local HTTP URL.
+
+A new *tab* is requested through desktop browser integration; the browser's
+own settings may change whether this reuses a window. A *separate window*
+requires a supported installed browser such as Firefox, Chromium or Brave;
+the app explicitly requests `--new-window` and reports an error rather than
+silently substituting a tab.

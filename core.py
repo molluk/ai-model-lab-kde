@@ -228,7 +228,7 @@ def stop(name):
     # If it still leads its own session/process group, stop only that owned
     # group (including child workers), never use pkill or broad name matches.
     try:
-        if os.getpgid(pid) == pid and name in ('office','comfy'):
+        if os.getpgid(pid) == pid and name in ('office','comfy','webui'):
             os.killpg(pid, signal.SIGTERM)
         else:
             os.kill(pid, signal.SIGTERM)
@@ -265,18 +265,65 @@ def start_model(alias):
     return f'Запуск {alias} продолжается (тайм-аут проверки готовности). Лог: {log}'
 
 
+def _webui_cli():
+    """Return an existing local Open WebUI entry point without downloading anything."""
+    candidates = [
+        shutil.which('open-webui'),
+        HOME / '.local/bin/open-webui',
+        HOME / '.local/share/uv/tools/open-webui/bin/open-webui',
+    ]
+    for candidate in candidates:
+        if candidate:
+            path = Path(candidate).expanduser()
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path)
+    return None
+
+
 def webui_start():
-    if not shutil.which('systemctl'): raise RuntimeError('Не найден systemctl')
+    if verified('webui'):
+        return 'Open WebUI уже работает как управляемый процесс'
+    if port_open(3000):
+        return 'Open WebUI уже отвечает на порту 3000 (чужой процесс не перехватывается)'
     service = settings().get('webui_service', 'open-webui.service')
-    proc = subprocess.run(['systemctl','--user','start',service], capture_output=True,text=True,timeout=30)
-    if proc.returncode: raise RuntimeError(proc.stderr.strip() or 'Ошибка запуска WebUI')
-    return f'WebUI: service {service} запущен'
+    error = ''
+    if shutil.which('systemctl'):
+        try:
+            proc = subprocess.run(['systemctl','--user','start',service],
+                                  capture_output=True,text=True,timeout=30)
+            if proc.returncode == 0:
+                return f'WebUI: служба {service} запущена'
+            error = proc.stderr.strip()
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            error = str(exc)
+    cli = _webui_cli()
+    if not cli:
+        raise RuntimeError(
+            'Не найдены работающая служба systemd --user и исполняемый open-webui. '
+            'Установи Open WebUI или укажи действующую службу. '
+            'Инструкция: https://docs.openwebui.com/getting-started/quick-start/ '
+            + (f'Причина: {error}' if error else '')
+        )
+    proc, log = spawn('webui', [cli, 'serve', '--host', '127.0.0.1', '--port', '3000'], cwd=HOME)
+    if proc.poll() is not None:
+        raise RuntimeError(f'Open WebUI немедленно завершился; журнал: {log}')
+    return f'Open WebUI запускается как отдельный процесс (PID {proc.pid}); журнал: {log}'
 
 
 def webui_stop():
+    if verified('webui'):
+        return stop('webui')
+    if not shutil.which('systemctl'):
+        return 'WebUI: systemctl отсутствует; чужие процессы не остановлены'
     service = settings().get('webui_service', 'open-webui.service')
-    proc = subprocess.run(['systemctl','--user','stop',service], capture_output=True,text=True,timeout=30)
-    if proc.returncode: raise RuntimeError(proc.stderr.strip() or 'Ошибка остановки WebUI')
+    active = subprocess.run(['systemctl','--user','is-active','--quiet',service],
+                            capture_output=True, timeout=6)
+    if active.returncode != 0:
+        return 'WebUI: управляемой активной службы нет; чужие процессы не остановлены'
+    proc = subprocess.run(['systemctl','--user','stop',service],
+                          capture_output=True,text=True,timeout=30)
+    if proc.returncode:
+        raise RuntimeError(proc.stderr.strip() or 'Ошибка остановки WebUI')
     return f'WebUI: остановлена служба {service}; сторонние процессы не тронуты'
 
 

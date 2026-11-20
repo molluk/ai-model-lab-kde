@@ -63,10 +63,13 @@ def stop_all_managed():
         if core.verified(key):
             attempt(label, lambda k=key: core.stop(k), lambda k=key: bool(core.verified(k)))
 
-    # WebUI is managed by the user's configured systemd service. Opening port
-    # 3000 alone is NOT evidence that AI Model Lab owns that server.
+    # WebUI may be a verified Lab-owned CLI process or a configured systemd user
+    # service. Port 3000 alone is never evidence of ownership.
     try:
-        if _unit_active('webui'):
+        if core.verified('webui'):
+            attempt('Open WebUI (managed CLI)', core.webui_stop,
+                    lambda: bool(core.verified('webui')))
+        elif _unit_active('webui'):
             attempt('Open WebUI (systemd --user)', core.webui_stop,
                     lambda: _unit_active('webui'))
         elif core.port_open(3000):

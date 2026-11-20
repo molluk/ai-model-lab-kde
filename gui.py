@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.10 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
@@ -39,6 +39,7 @@ import multi
 import client_launcher
 import custom_services
 import shutdown_manager
+import service_browser
 from i18n import T, set_language, get_language, available_languages
 
 COLORS = {
@@ -169,6 +170,7 @@ class Window(QMainWindow):
         self.cfg = core.config()
         self.settings_data = core.settings()
         set_language(self.settings_data.get("language", "ru"))
+        self.browser_mode_controls = {sid: [] for sid in service_browser.SERVICES}
         self.jobs = []
         self.proc = None
         self.model_action_busy = False
@@ -473,53 +475,64 @@ class Window(QMainWindow):
         elif msg.clickedButton() is docs:
             self.open_url(url)
 
-    def open_webui(self):
-        if core.port_open(3000):
-            self.open_url('http://127.0.0.1:3000')
-            return
-        msg = QMessageBox(self)
-        msg.setWindowTitle(T('Open WebUI не запущен'))
-        msg.setText(T('Open WebUI не отвечает на 127.0.0.1:3000.'))
-        msg.setInformativeText(
-            T('Если сервис установлен, запусти его на вкладке «Управление» '
-            'или через systemctl --user start open-webui.service.\n'
-            'Если не установлен, см. https://docs.openwebui.com/getting-started/quick-start/.')
+    def create_browser_mode_combo(self, sid):
+        """A per-service preference, shared across Models and Management tabs."""
+        combo = QComboBox()
+        combo.setMinimumWidth(128)
+        combo.addItem(T('Во вкладке'), 'tab')
+        combo.addItem(T('В отдельном окне'), 'window')
+        index = combo.findData(service_browser.get_mode(sid, self.settings_data))
+        combo.setCurrentIndex(max(0, index))
+        combo.setToolTip(T('Режим открытия сохраняется отдельно для каждого сервиса'))
+        combo.currentIndexChanged.connect(
+            lambda _index, service=sid, widget=combo: self.change_browser_mode(service, widget)
         )
-        start = msg.addButton(T('Перейти к управлению'), QMessageBox.ButtonRole.ActionRole)
-        docs = msg.addButton(T('Документация'), QMessageBox.ButtonRole.ActionRole)
-        msg.addButton(T('Закрыть'), QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-        if msg.clickedButton() is start:
-            self.tabs.setCurrentIndex(1)
-        elif msg.clickedButton() is docs:
-            self.open_url('https://docs.openwebui.com/getting-started/quick-start/')
+        self.browser_mode_controls[sid].append(combo)
+        return combo
+
+    def change_browser_mode(self, sid, source):
+        mode = source.currentData()
+        try:
+            state = service_browser.set_mode(sid, mode)
+        except Exception as exc:
+            QMessageBox.warning(self, T('Настройки браузера'), str(exc))
+            return
+        self.settings_data = state
+        for combo in self.browser_mode_controls.get(sid, []):
+            if combo is source:
+                continue
+            combo.blockSignals(True)
+            combo.setCurrentIndex(max(0, combo.findData(mode)))
+            combo.blockSignals(False)
+
+    def open_service(self, sid):
+        """Open a ready service; start and wait asynchronously when stopped."""
+        if sid in self.service_busy:
+            return
+        titles = {'webui': 'Open WebUI', 'office': 'Agent Office', 'comfy': 'ComfyUI'}
+        title = titles.get(sid, sid)
+        mode = service_browser.get_mode(sid, self.settings_data)
+        self.service_busy.add(sid)
+        self.update_builtin_services(core.get_status())
+
+        def completed(ok, url):
+            self.service_busy.discard(sid)
+            self.update_builtin_services(core.get_status())
+            if not ok:
+                return
+            try:
+                self.set_message(service_browser.open_browser(url.strip(), mode))
+            except Exception as exc:
+                QMessageBox.warning(self, T('Не удалось открыть браузер'), str(exc))
+
+        self.async_call(T('Подготовка сервиса ') + title,
+                        lambda: service_browser.ensure_ready(sid), after=completed)
+
+    def open_webui(self):
+        self.open_service('webui')
 
     def open_office(self):
-        url = core.office_url()
-        if url and (url.startswith('http://127.0.0.1:') or url.startswith('http://localhost:')):
-            port = url.rsplit(':',1)[-1].split('/')[0]
-            if port.isdigit() and core.port_open(int(port)):
-                self.open_url(url)
-                return
-        directory = core.office_path()
-        is_installed = (directory / 'run.py').is_file()
-        msg = QMessageBox(self)
-        msg.setWindowTitle(T('Agent Office недоступен'))
-        msg.setText(T('Agent Office не запущен или его адрес не определён.') if is_installed else T('Agent Office не установлен по указанному пути.'))
-        msg.setInformativeText(
-            T(f'Проверяемый каталог: {directory}\n')
-            + (T('Открой вкладку «Управление» и запусти Agent Office. При необходимости укажи office_url в настройках.')
-               if is_installed else
-               T('Укажи правильный каталог на вкладке «Настройки». Исходный проект: https://github.com/NosytLabs/agent-office'))
-        )
-        manage = msg.addButton(T('Открыть управление'), QMessageBox.ButtonRole.ActionRole)
-        docs = msg.addButton(T('Открыть GitHub'), QMessageBox.ButtonRole.ActionRole)
-        msg.addButton(T('Закрыть'), QMessageBox.ButtonRole.RejectRole)
-        msg.exec()
-        if msg.clickedButton() is manage:
-            self.tabs.setCurrentIndex(1)
-        elif msg.clickedButton() is docs:
-            self.open_url('https://github.com/NosytLabs/agent-office')
+        self.open_service('office')
 
     def copy_selected_api(self):
         alias = self.selected_alias()
@@ -844,8 +857,14 @@ class Window(QMainWindow):
         self.client_hint.setStyleSheet('color:#a1b4cf;font-size:11px;')
         f.addWidget(self.client_hint)
         f.addWidget(btn(T('✎ Редактировать параметры'), self.open_selected_in_editor))
-        f.addWidget(btn(T('🌐 Открыть WebUI'), self.open_webui))
-        f.addWidget(btn(T('🏢 Открыть Agent Office'), self.open_office))
+        for sid, caption, action in (
+            ('webui', T('🌐 Открыть WebUI'), self.open_webui),
+            ('office', T('🏢 Открыть Agent Office'), self.open_office),
+        ):
+            line = QHBoxLayout()
+            line.addWidget(btn(caption, action), 2)
+            line.addWidget(self.create_browser_mode_combo(sid), 1)
+            f.addLayout(line)
         r.addWidget(box)
         hint = QLabel(T('Каждая модель: свой порт и GPU. Двойной щелчок → редактор.\nШирина колонок сохраняется автоматически.'))
         hint.setWordWrap(True); r.addWidget(hint)
@@ -1023,11 +1042,12 @@ class Window(QMainWindow):
         l.addLayout(row)
         self.service_labels = {}
         self.service_buttons = {}
+        self.service_open_buttons = {}
         self.service_busy = set()
         self.builtin_services = [
             ('webui', 'Open WebUI · :3000', core.webui_start, core.webui_stop, self.open_webui),
             ('office', 'Agent Office', core.office_start, lambda: core.stop('office'), self.open_office),
-            ('comfy', 'ComfyUI · :8188', core.comfy_start, lambda: core.stop('comfy'), lambda: self.open_url('http://127.0.0.1:8188')),
+            ('comfy', 'ComfyUI · :8188', core.comfy_start, lambda: core.stop('comfy'), lambda: self.open_service('comfy')),
         ]
         for sid, name, _start, _stop, open_action in self.builtin_services:
             group = QGroupBox(name)
@@ -1038,7 +1058,10 @@ class Window(QMainWindow):
             toggle = btn(T('▶ Запустить'), lambda _checked=False, sid=sid: self.toggle_builtin_service(sid), primary=True)
             self.service_buttons[sid] = toggle
             item.addWidget(toggle)
-            item.addWidget(btn(T('Открыть'), open_action))
+            open_button = btn(T('Открыть'), open_action)
+            self.service_open_buttons[sid] = open_button
+            item.addWidget(open_button)
+            item.addWidget(self.create_browser_mode_combo(sid))
             l.addWidget(group)
 
         custom_box = QGroupBox(T('Пользовательские AI-сервисы'))
@@ -1073,6 +1096,8 @@ class Window(QMainWindow):
         snapshot = snapshot if snapshot is not None else core.get_status()
         if sid == 'webui':
             # A listening :3000 is not proof that AI Lab owns it.
+            if core.verified('webui'):
+                return 'running'
             try:
                 service = core.settings().get('webui_service', 'open-webui.service')
                 result = subprocess.run(['systemctl', '--user', 'is-active', service],
@@ -1116,6 +1141,8 @@ class Window(QMainWindow):
             lab.setStyleSheet('color:' + color + ';')
             button.setText(caption)
             button.setEnabled(enabled)
+            if hasattr(self, 'service_open_buttons'):
+                self.service_open_buttons[sid].setEnabled(sid not in self.service_busy)
             button.setStyleSheet('background:#63333b;border:1px solid #ae5364;' if 'Остановить' in caption or 'Stop' in caption else '')
 
     def toggle_builtin_service(self, sid):

@@ -395,6 +395,14 @@
     "Остановка завершилась с ошибками — проверь сервисы.": "Shutdown finished with errors — check the services.",
     "Управляемые процессы остановлены. Неуправляемые экземпляры оставлены работать:": "Managed processes are stopped. These unmanaged services were left running:",
     "Нет результата завершения": "No shutdown result received",
-    "Дождись завершения запуска или остановки сервера.": "Wait for the current server start/stop operation to finish."
+    "Дождись завершения запуска или остановки сервера.": "Wait for the current server start/stop operation to finish.",
+    "Во вкладке": "In a browser tab",
+    "В отдельном окне": "In a separate window",
+    "Режим открытия сохраняется отдельно для каждого сервиса": "Opening preference is saved separately for each service",
+    "Настройки браузера": "Browser settings",
+    "Не удалось открыть браузер": "Could not open browser",
+    "Подготовка сервиса ": "Preparing service ",
+    "Открыть WebUI": "Open WebUI",
+    "Открыть Agent Office": "Open Agent Office"
   }
 }
