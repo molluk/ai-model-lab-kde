@@ -12,6 +12,7 @@ This directory contains AI Model Lab's user guides, release notes and contributo
 | Installation / Установка | [INSTALL.md](INSTALL.md) | [INSTALL_RU.md](INSTALL_RU.md) |
 | Benchmarks / Тесты | [BENCHMARKS.md](BENCHMARKS.md) | [BENCHMARKS.md](BENCHMARKS.md) |
 | Localization / Переводы | [LOCALIZATION.md](LOCALIZATION.md) | [LOCALIZATION.md](LOCALIZATION.md) |
+| Pi Office Bridge | [PI_OFFICE_BRIDGE.md](PI_OFFICE_BRIDGE.md) | [PI_OFFICE_BRIDGE_RU.md](PI_OFFICE_BRIDGE_RU.md) |
 | Licensing / Лицензия | [LICENSING_GUIDE.md](LICENSING_GUIDE.md) | [LICENSING_GUIDE_RU.md](LICENSING_GUIDE_RU.md) |
 | Publishing / Публикация | [PUBLISH_TO_GITHUB.md](PUBLISH_TO_GITHUB.md) | [PUBLISH_TO_GITHUB_RU.md](PUBLISH_TO_GITHUB_RU.md) |
 

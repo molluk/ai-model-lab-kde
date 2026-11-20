@@ -17,6 +17,7 @@ import sys
 
 import core
 import multi
+import pi_bridge_manager
 
 CLIENTS = ('opencode', 'pi')
 
@@ -163,6 +164,9 @@ def build_command(info, client, executable, version=None):
             safe_write_json(agent_dir / 'models.json', isolated_pi_config(info))
             env['PI_CODING_AGENT_DIR'] = str(agent_dir.resolve())
             name = 'Pi — отдельная локальная конфигурация (без глобальных расширений)'
+        agent_dir = Path(env.get('PI_CODING_AGENT_DIR') or core.HOME / '.pi' / 'agent')
+        if pi_bridge_manager.needs_explicit_extension(agent_dir):
+            argv += ['--extension', str(pi_bridge_manager.bridge_file())]
         argv += ['--provider', provider, '--model', info['alias'], '--thinking', 'off']
         return argv, env, name
     raise ValueError('Неизвестный клиент: ' + str(client))

@@ -51,7 +51,7 @@ class TestClients(unittest.TestCase):
                 with mock.patch.object(client, 'pi_global_matches', return_value=False):
                     argv, env, _ = client.build_command(INFO, 'pi', '/tmp/pi')
                 self.assertEqual(argv[-1], 'off')
-                self.assertEqual(argv[2], 'ai-model-lab')
+                self.assertEqual(argv[argv.index('--provider') + 1], 'ai-model-lab')
                 path = Path(env['PI_CODING_AGENT_DIR']) / 'models.json'
                 self.assertTrue(path.is_file())
                 loaded = core.load_json(path)
@@ -69,7 +69,7 @@ class TestClients(unittest.TestCase):
     def test_pi_reuses_matching_global_provider(self):
         with mock.patch.object(client, 'pi_global_matches', return_value=True):
             argv, env, _ = client.build_command(INFO, 'pi', '/tmp/pi')
-        self.assertEqual(argv[2], 'local-lab')
+        self.assertEqual(argv[argv.index('--provider') + 1], 'local-lab')
         self.assertNotIn('PI_CODING_AGENT_DIR', env) if 'PI_CODING_AGENT_DIR' not in os.environ else None
 
     def test_ready_alias_verified_against_props(self):

@@ -12,14 +12,14 @@ mkdir -p "$DEST" "$HOME/.local/bin" "$HOME/.local/share/applications"
 if [[ -f "$DEST/gui.py" ]]; then
   BACKUP="$DEST/data/backups/release-$(date +%Y%m%d_%H%M%S)"
   mkdir -p "$BACKUP"
-  for f in core.py multi.py gui.py bench.py client_launcher.py i18n.py custom_services.py shutdown_manager.py service_browser.py run.sh install.sh; do
+  for f in core.py multi.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py run.sh install.sh; do
     if [[ -f "$DEST/$f" ]]; then cp -p "$DEST/$f" "$BACKUP/$f"; fi
   done
   printf 'Резервная копия прежнего кода: %s\n' "$BACKUP"
 fi
 
 # Preserve existing profiles and reports when upgrading.
-for name in core.py multi.py gui.py bench.py client_launcher.py i18n.py custom_services.py shutdown_manager.py service_browser.py release_preflight.py run.sh README.md LICENSE NOTICE; do
+for name in core.py multi.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py release_preflight.py run.sh README.md LICENSE NOTICE; do
   install -m 0644 "$SOURCE/$name" "$DEST/$name"
 done
 install -m 0755 "$SOURCE/install.sh" "$DEST/install.sh"
@@ -40,7 +40,7 @@ done
 if [[ ! -f "$DEST/services.json" ]]; then
   install -m 0600 "$SOURCE/services.example.json" "$DEST/services.json"
 fi
-mkdir -p "$DEST/benchmarks/prompts" "$DEST/benchmarks/extensions" "$DEST/tests" "$DEST/assets" "$DEST/locales" "$DEST/docs"
+mkdir -p "$DEST/benchmarks/prompts" "$DEST/benchmarks/extensions" "$DEST/tests" "$DEST/assets" "$DEST/locales" "$DEST/docs" "$DEST/extensions"
 # Install consolidated documentation without changing user profiles or reports.
 for doc in "$SOURCE"/docs/*.md; do
   [[ -f "$doc" ]] || continue
@@ -52,6 +52,10 @@ if compgen -G "$SOURCE/benchmarks/prompts/*.md" >/dev/null; then
 fi
 install -m 0644 "$SOURCE/benchmarks/extensions/"*.js "$DEST/benchmarks/extensions/"
 install -m 0644 "$SOURCE/tests/"test_*.py "$DEST/tests/"
+install -m 0644 "$SOURCE/extensions/pi-office-bridge.js" "$DEST/extensions/pi-office-bridge.js"
+if compgen -G "$SOURCE/tests/*.mjs" >/dev/null; then
+  install -m 0644 "$SOURCE/tests/"*.mjs "$DEST/tests/"
+fi
 if compgen -G "$SOURCE/assets/*.svg" >/dev/null; then install -m 0644 "$SOURCE/assets/"*.svg "$DEST/assets/"; fi
 mkdir -p "$DEST/data/reports" "$DEST/data/logs"
 chmod 700 "$DEST/data" "$DEST/data/reports" "$DEST/data/logs"

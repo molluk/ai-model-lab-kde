@@ -3,6 +3,12 @@
 **Provenance:** the commit history is reconstructed; entries describe observed
 features/changes in the corresponding ZIP, not claims about original commit dates.
 
+## Unreleased — Pi Office Bridge
+- Add optional observer extension for real Pi lifecycle, tool, and UI-wait events, using Agent Office's existing atomic inbox protocol.
+- Auto-load in Pi launched through AI Model Lab, including isolated provider profiles; skip explicit load when the bridge is already present in the Pi extension directory.
+- Add opt-in global Pi symlink install/status/uninstall without modifying Pi configuration or tool permissions.
+- Ship offline bridge event-contract tests, optional Node.js verification, RU/EN setup guides, and packaging checks.
+
 ## Unreleased — one-click service opening
 - Open WebUI and Agent Office with a single click: start stopped services, wait for HTTP readiness, then open the browser.
 - Choose browser tab or separate window for each service; preferences persist in settings.json.
