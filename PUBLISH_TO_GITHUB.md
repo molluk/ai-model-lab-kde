@@ -4,6 +4,10 @@ This repository has Git history reconstructed from eleven supplied release ZIPs,
 - Public history: PolyForm Noncommercial 1.0.0 is present in every commit and tag; earlier distributed copies may have different terms.
 check `git log` before publication.
 
+## Before anything: confirm the license
+
+- Public history: PolyForm Noncommercial 1.0.0 is present in every commit and tag; earlier distributed copies may have different terms.
+
 ## Create an empty GitHub repository
 
 1. Sign in as **molluk** at https://github.com/new.
@@ -32,6 +36,8 @@ replacing it. The GitHub account must be authenticated for `git push`
 account password authentication over Git HTTPS is not supported).
 
 Do not run `git push --force`. Preserve history and release tags.
+
+For step-by-step Russian instructions, see [`PUBLISH_TO_GITHUB_RU.md`](PUBLISH_TO_GITHUB_RU.md).
 
 ## Review before making public
 
