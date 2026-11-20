@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.3 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE v3.4 — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
@@ -51,7 +51,8 @@ QPushButton {{ background:{COLORS['panel']};border:1px solid {COLORS['line']};
 QPushButton:hover {{ background:#324563;border-color:{COLORS['accent']}; }}
 QPushButton:disabled {{ color:#6e7d93;background:#202736;border-color:#253449; }}
 QPushButton#Primary {{ background:#245e9a;border:1px solid #438de1;font-weight:700; }}
-QPushButton#Danger {{ background:#63333b;border:1px solid #ae5364; }}
+QPushButton#Danger { background:#63333b;border:1px solid #ae5364; }
+QPushButton#Slim { padding:5px 10px; min-height:18px; font-size:12px; border-radius:6px; }
 QTabWidget::pane {{ border:1px solid {COLORS['line']};border-radius:8px; }}
 QTabBar::tab {{ padding:11px 17px;background:{COLORS['surface']};color:{COLORS['muted']}; }}
 QTabBar::tab:selected {{ color:white;background:#2a405c;border-bottom:2px solid #62a9ff; }}
@@ -67,13 +68,27 @@ QScrollBar::handle:horizontal {{ background:#536983;border-radius:4px; }}
 '''
 
 
-def btn(text, callback, primary=False, danger=False):
+def btn(text, callback, primary=False, danger=False, slim=False):
     b = QPushButton(text)
+    names = []
     if primary:
-        b.setObjectName('Primary')
+        names.append('Primary')
     if danger:
-        b.setObjectName('Danger')
+        names.append('Danger')
+    if slim:
+        names.append('Slim')
+    if names:
+        b.setObjectName(' '.join(names))
+        # fallback for styles that rely on substring matching
+        b.setProperty('class', ' '.join(names))
     b.clicked.connect(callback)
+    return b
+
+
+def slim_btn(text, callback, primary=False, danger=False):
+    b = btn(text, callback, primary=primary, danger=danger)
+    b.setProperty('slim', True)
+    b.setStyleSheet('padding:5px 10px; min-height:18px; font-size:12px; border-radius:6px;')
     return b
 
 
@@ -236,8 +251,83 @@ class Window(QMainWindow):
         self.timer.start(3000)
 
         self.setup_tray()
+        self.apply_retention_cleanup(startup=True)
         self.refresh_reports()
         self.refresh_status()
+
+
+    def protected_log_paths(self):
+        paths = []
+        try:
+            for state in multi.active_instances().values():
+                if state.get('log'):
+                    paths.append(state.get('log'))
+        except Exception:
+            pass
+        return paths
+
+    def apply_retention_cleanup(self, startup=False):
+        logs_days = int(self.settings_data.get('logs_retention_days', 30) or 0)
+        reports_days = int(self.settings_data.get('reports_retention_days', 90) or 0)
+        stats = core.cleanup_artifacts(logs_days, reports_days, self.protected_log_paths())
+        if not startup and (stats['logs_deleted'] or stats['report_dirs_deleted'] or stats['errors']):
+            msg = f"Удалено логов: {stats['logs_deleted']}; отчётов: {stats['report_dirs_deleted']}"
+            if stats['errors']:
+                msg += "\nОшибки: " + '; '.join(stats['errors'][:4])
+            QMessageBox.information(self, 'Очистка', msg)
+        return stats
+
+    def cleanup_old_artifacts(self):
+        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.information(self, 'Очистка', 'Сначала останови запущенный тест, чтобы не трогать формируемый отчёт.')
+            return
+        logs_days = int(self.logs_retention.value()) if hasattr(self, 'logs_retention') else int(self.settings_data.get('logs_retention_days', 30) or 0)
+        reports_days = int(self.reports_retention.value()) if hasattr(self, 'reports_retention') else int(self.settings_data.get('reports_retention_days', 90) or 0)
+        question = f'Удалить артефакты старше указанного срока?\nЛоги: {logs_days} дн.\nОтчёты: {reports_days} дн.\nЖурналы активных моделей сохранятся.'
+        if QMessageBox.question(self, 'Очистка логов и отчётов', question) != QMessageBox.StandardButton.Yes:
+            return
+        self.settings_data['logs_retention_days'] = logs_days
+        self.settings_data['reports_retention_days'] = reports_days
+        core.atomic_json(core.SETTINGS, self.settings_data)
+        stats = self.apply_retention_cleanup(startup=False)
+        self.refresh_reports()
+        self.refresh_status()
+        self.set_message(f"Очистка завершена: логов {stats['logs_deleted']}, отчётов {stats['report_dirs_deleted']}")
+
+    def clear_all_logs(self):
+        if QMessageBox.question(self, 'Очистить все логи', 'Удалить ВСЕ старые логи AI Model Lab, кроме журналов активных процессов?') != QMessageBox.StandardButton.Yes:
+            return
+        stats = core.cleanup_artifacts(0, 0, [])
+        protected = {str(Path(p).resolve()) for p in self.protected_log_paths() if p}
+        deleted = 0
+        for path in core.LOGS.glob('*.log'):
+            try:
+                if str(path.resolve()) in protected:
+                    continue
+                path.unlink(missing_ok=True)
+                deleted += 1
+            except OSError:
+                pass
+        self.set_message(f'Удалено логов: {deleted}')
+        QMessageBox.information(self, 'Логи', f'Удалено логов: {deleted}. Журналы активных моделей сохранены.')
+
+    def clear_all_reports(self):
+        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.information(self, 'Очистка отчётов', 'Сначала останови запущенный тест, чтобы не повредить формируемый отчёт.')
+            return
+        if QMessageBox.question(self, 'Очистить все отчёты', 'Удалить ВСЕ папки отчётов из AI Model Lab?') != QMessageBox.StandardButton.Yes:
+            return
+        deleted = 0
+        for summary in list(core.REPORTS.glob('*/summary.json')):
+            try:
+                import shutil
+                shutil.rmtree(summary.parent)
+                deleted += 1
+            except OSError:
+                pass
+        self.refresh_reports()
+        self.set_message(f'Удалено отчётов: {deleted}')
+        QMessageBox.information(self, 'Отчёты', f'Удалено папок отчётов: {deleted}')
 
     # ---------- Shared helpers ----------
     def set_message(self, text):
@@ -408,15 +498,16 @@ class Window(QMainWindow):
         self.tree.itemDoubleClicked.connect(self.open_selected_in_editor)
         self.tree.currentItemChanged.connect(self.on_model_selected)
         self.tree.setUniformRowHeights(True)
-        # Two rows remain usable even when the splitter is at its narrowest.
-        actions = QGridLayout()
-        actions.addWidget(btn('＋ Добавить', self.add_model, True), 0, 0)
-        actions.addWidget(btn('⧉ Клонировать', self.clone_selected_model), 0, 1)
-        actions.addWidget(btn('－ Удалить', self.delete_selected_model, danger=True), 1, 0)
-        actions.addWidget(btn('✎ Изменить', self.open_selected_in_editor), 1, 1)
-        left_layout.addLayout(actions)
         self.tree.setMinimumHeight(215)
         left_layout.addWidget(self.tree, 3)
+        actions = QHBoxLayout()
+        actions.setSpacing(6)
+        actions.addWidget(slim_btn('＋ Добавить', self.add_model, primary=True))
+        actions.addWidget(slim_btn('⧉ Клонировать', self.clone_selected_model))
+        actions.addWidget(slim_btn('－ Удалить', self.delete_selected_model, danger=True))
+        actions.addWidget(slim_btn('✎ Изменить', self.open_selected_in_editor))
+        actions.addStretch()
+        left_layout.addLayout(actions)
         self.status_label = QLabel('Статус: ожидание'); self.status_label.setObjectName('Subheader')
         self.status_label.setWordWrap(True); left_layout.addWidget(self.status_label)
         logs_group = QGroupBox('Живой журнал выбранной модели'); logs_layout = QVBoxLayout(logs_group)
@@ -824,6 +915,8 @@ class Window(QMainWindow):
         row = QHBoxLayout()
         row.addWidget(btn('↻ Обновить отчёты', self.refresh_reports))
         row.addWidget(btn('🔎 Сравнить два выбранных', self.compare_reports))
+        row.addWidget(slim_btn('🧹 Очистить старые', self.cleanup_old_artifacts))
+        row.addWidget(slim_btn('🗑 Очистить все отчёты', self.clear_all_reports, danger=True))
         row.addStretch()
         l.addLayout(row)
         self.reports = QTableWidget(0, 6)
@@ -915,46 +1008,75 @@ class Window(QMainWindow):
         w = QScrollArea()
         w.setWidgetResizable(True)
         content = QWidget()
-        content.setMinimumHeight(770)
+        content.setMinimumHeight(840)
         l = QVBoxLayout(content)
         w.setWidget(content)
-        common=QGroupBox('Общие настройки программы'); f=QFormLayout(common)
-        self.set_inputs={}
-        for key,label in [('android_project','Каталог Android-проекта'),('office_dir','Каталог Agent Office'),
-                          ('office_url','URL Agent Office'),('comfy_dir','Каталог ComfyUI'),
-                          ('webui_service','Служба WebUI'),('gpu_index','GPU для графика nvidia-smi')]:
-            inp=QLineEdit(str(self.settings_data.get(key,''))); self.set_inputs[key]=inp; f.addRow(label,inp)
+
+        common = QGroupBox('Общие настройки программы и хранение данных')
+        grid = QGridLayout(common)
+        self.set_inputs = {}
+        common_fields = [
+            ('android_project','Каталог Android-проекта'),('office_dir','Каталог Agent Office'),
+            ('office_url','URL Agent Office'),('comfy_dir','Каталог ComfyUI'),
+            ('webui_service','Служба WebUI'),('gpu_index','GPU для графика nvidia-smi')
+        ]
+        for row, (key, label) in enumerate(common_fields):
+            grid.addWidget(QLabel(label), row, 0)
+            inp = QLineEdit(str(self.settings_data.get(key, '')))
+            self.set_inputs[key] = inp
+            grid.addWidget(inp, row, 1, 1, 3)
+
+        retain_row = len(common_fields)
+        grid.addWidget(QLabel('Хранить логи, дней (0 = без удаления)'), retain_row, 0)
+        self.logs_retention = QSpinBox(); self.logs_retention.setRange(0, 3650)
+        self.logs_retention.setValue(int(self.settings_data.get('logs_retention_days', 30)))
+        grid.addWidget(self.logs_retention, retain_row, 1)
+        grid.addWidget(QLabel('Хранить отчёты, дней (0 = без удаления)'), retain_row, 2)
+        self.reports_retention = QSpinBox(); self.reports_retention.setRange(0, 3650)
+        self.reports_retention.setValue(int(self.settings_data.get('reports_retention_days', 90)))
+        grid.addWidget(self.reports_retention, retain_row, 3)
+
+        cleanup_row = retain_row + 1
+        grid.addWidget(slim_btn('🧹 Очистить старые логи и отчёты', self.cleanup_old_artifacts), cleanup_row, 0)
+        grid.addWidget(slim_btn('🧾 Очистить все логи', self.clear_all_logs, danger=True), cleanup_row, 1)
+        grid.addWidget(slim_btn('📊 Очистить все отчёты', self.clear_all_reports, danger=True), cleanup_row, 2)
+        grid.addWidget(slim_btn('💾 Сохранить настройки программы', self.save_all_settings, primary=True), cleanup_row, 3)
         l.addWidget(common)
-        split=QSplitter(Qt.Orientation.Horizontal)
+
+        split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
-        split.setMinimumHeight(445)
-        l.addWidget(split,1)
-        left=QWidget(); lv=QVBoxLayout(left)
-        controls=QHBoxLayout()
-        controls.addWidget(btn('＋ Добавить',self.add_model,True))
-        controls.addWidget(btn('⧉ Клонировать',self.clone_model))
-        controls.addWidget(btn('－ Удалить',self.delete_model,danger=True))
-        lv.addLayout(controls)
-        self.settings_tree=QTreeWidget(); self.settings_tree.setColumnCount(2)
+        split.setMinimumHeight(500)
+        l.addWidget(split, 1)
+
+        left = QWidget(); lv = QVBoxLayout(left)
+        self.settings_tree = QTreeWidget(); self.settings_tree.setColumnCount(2)
         self.settings_tree.setHeaderLabels(['ID','Название'])
         self.settings_tree.itemSelectionChanged.connect(self.load_selected_editor_model)
-        lv.addWidget(self.settings_tree,1); split.addWidget(left)
-        right=QWidget(); rv=QVBoxLayout(right)
-        self.editor_tabs=QTabWidget(); self.edit_fields={}
+        lv.addWidget(self.settings_tree, 1)
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
+        controls.addWidget(slim_btn('＋ Добавить', self.add_model, primary=True))
+        controls.addWidget(slim_btn('⧉ Клонировать', self.clone_model))
+        controls.addWidget(slim_btn('－ Удалить', self.delete_model, danger=True))
+        controls.addStretch()
+        lv.addLayout(controls)
+        split.addWidget(left)
+
+        right = QWidget(); rv = QVBoxLayout(right)
+        self.editor_tabs = QTabWidget(); self.edit_fields = {}
         self.build_model_editor_form()
-        rv.addWidget(self.editor_tabs,1)
-        sr=QHBoxLayout()
-        self.autosave_checkbox=QCheckBox('Автосохранение профиля')
-        self.autosave_checkbox.setChecked(bool(self.settings_data.get('autosave_profiles',False)))
+        rv.addWidget(self.editor_tabs, 1)
+        sr = QHBoxLayout()
+        self.autosave_checkbox = QCheckBox('Автосохранение профиля')
+        self.autosave_checkbox.setChecked(bool(self.settings_data.get('autosave_profiles', False)))
         self.autosave_checkbox.stateChanged.connect(self.toggle_autosave)
         sr.addWidget(self.autosave_checkbox)
-        sr.addWidget(btn('💾 Сохранить профиль',self.save_current_model,True))
-        sr.addWidget(btn('💾 Сохранить настройки программы',self.save_all_settings))
+        sr.addWidget(btn('💾 Сохранить профиль', self.save_current_model, True))
         rv.addLayout(sr)
-        self.editor_hint=QLabel('Изменения профиля не сохранены' )
+        self.editor_hint = QLabel('Изменения профиля не сохранены')
         self.editor_hint.setObjectName('Subheader'); rv.addWidget(self.editor_hint)
-        split.addWidget(right); split.setSizes([360,840])
-        note=QLabel('Сохранение не переписывает ~/.pi/agent/models.json. Для Android Pi проверь отдельно contextWindow, maxTokens и API-адрес.')
+        split.addWidget(right); split.setSizes([360, 840])
+        note = QLabel('Сохранение не переписывает ~/.pi/agent/models.json. Для Android Pi проверь отдельно contextWindow, maxTokens и API-адрес. Очистка логов не удаляет журналы активных процессов.')
         note.setWordWrap(True); l.addWidget(note)
         self.populate_settings_tree()
         if self.settings_tree.topLevelItemCount():
@@ -1292,11 +1414,17 @@ class Window(QMainWindow):
         self.editor_tabs.setCurrentIndex(0)
 
     def save_all_settings(self):
-        data=core.settings()
-        data.update({k:w.text().strip() for k,w in self.set_inputs.items()})
-        core.atomic_json(core.SETTINGS,data)
-        self.settings_data=data
-        QMessageBox.information(self,'Настройки','Настройки программы сохранены. Профили сохраняются отдельно.')
+        data = core.settings()
+        data.update({k: w.text().strip() for k, w in self.set_inputs.items()})
+        if hasattr(self, 'logs_retention'):
+            data['logs_retention_days'] = int(self.logs_retention.value())
+        if hasattr(self, 'reports_retention'):
+            data['reports_retention_days'] = int(self.reports_retention.value())
+        core.atomic_json(core.SETTINGS, data)
+        self.settings_data = data
+        self.apply_retention_cleanup(startup=True)
+        self.refresh_reports()
+        QMessageBox.information(self, 'Настройки', 'Настройки программы сохранены. Профили сохраняются отдельно.')
 
     # ---------- Status and logs ----------
     def append_log(self,text):

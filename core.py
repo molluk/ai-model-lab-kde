@@ -410,3 +410,49 @@ def all_gpu_metrics():
         return results
     except (OSError, subprocess.TimeoutExpired):
         return []
+
+
+def _age_days(path):
+    try:
+        return (time.time() - path.stat().st_mtime) / 86400.0
+    except OSError:
+        return 0.0
+
+
+def cleanup_artifacts(log_days=0, report_days=0, keep_log_paths=None):
+    """Delete old logs/report folders.
+
+    log_days/report_days: 0 disables automatic deletion.
+    keep_log_paths: iterable of absolute paths that must never be deleted
+    (for example logs of currently running managed instances).
+    Returns dict with counters.
+    """
+    prepare()
+    keep = {str(Path(p).resolve()) for p in (keep_log_paths or []) if p}
+    stats = {'logs_deleted': 0, 'report_dirs_deleted': 0, 'errors': []}
+    try:
+        log_days = int(log_days or 0)
+        report_days = int(report_days or 0)
+    except (TypeError, ValueError):
+        log_days = report_days = 0
+    if log_days > 0 and LOGS.is_dir():
+        for path in LOGS.glob('*.log'):
+            try:
+                resolved = str(path.resolve())
+                if resolved in keep:
+                    continue
+                if _age_days(path) >= log_days:
+                    path.unlink(missing_ok=True)
+                    stats['logs_deleted'] += 1
+            except OSError as exc:
+                stats['errors'].append(f'log {path.name}: {exc}')
+    if report_days > 0 and REPORTS.is_dir():
+        for summary in REPORTS.glob('*/summary.json'):
+            root = summary.parent
+            try:
+                if _age_days(root) >= report_days:
+                    shutil.rmtree(root, ignore_errors=False)
+                    stats['report_dirs_deleted'] += 1
+            except OSError as exc:
+                stats['errors'].append(f'report {root.name}: {exc}')
+    return stats
