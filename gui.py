@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.2 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE v3.3 — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
@@ -57,7 +57,9 @@ QTabBar::tab {{ padding:11px 17px;background:{COLORS['surface']};color:{COLORS['
 QTabBar::tab:selected {{ color:white;background:#2a405c;border-bottom:2px solid #62a9ff; }}
 QTreeWidget,QTableWidget,QTextEdit,QPlainTextEdit,QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox {{ background:#141e2b;
         border:1px solid #31415a;border-radius:6px;padding:5px;selection-background-color:#2b6197; }}
-QHeaderView::section {{ background:#25344a;color:#dfe9f7;border:0px;padding:7px; }}
+QHeaderView::section {{ background:#25344a;color:#dfe9f7;border-right:2px solid #56708c;
+                           border-bottom:2px solid #56708c;padding:8px; }}
+QTreeWidget::item {{ border-right:1px solid #2b3e57;border-bottom:1px solid #25364b; }}
 QScrollBar:vertical {{ background:#1e2a3a;width:10px; }}
 QScrollBar::handle:vertical {{ background:#536983;border-radius:4px; }}
 QScrollBar:horizontal {{ background:#1e2a3a;height:10px; }}
@@ -103,7 +105,8 @@ class Sparkline(QWidget):
         self.unit = unit
         self.maximum = max_value
         self.samples = deque(maxlen=60)
-        self.setMinimumSize(220, 96)
+        self.setMinimumSize(185, 100)
+        self.setMaximumHeight(132)
 
     def add(self, value):
         if value is not None:
@@ -182,12 +185,21 @@ class Window(QMainWindow):
         titles.addWidget(t)
         header.addLayout(titles)
         header.addStretch()
-        header.addWidget(btn('🧪 Тесты', lambda: self.tabs.setCurrentIndex(2), True))
-        header.addWidget(btn('⚙ Управление', lambda: self.tabs.setCurrentIndex(1), True))
         header.addWidget(btn('↻ Обновить', self.refresh_status))
         layout.addLayout(header)
 
-        metrics = QHBoxLayout()
+        # A fixed minimum-content width prevents four plots and per-GPU telemetry
+        # from collapsing into unreadable slivers on narrow windows.
+        self.metrics_scroll = QScrollArea()
+        self.metrics_scroll.setWidgetResizable(True)
+        self.metrics_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.metrics_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.metrics_scroll.setMinimumHeight(151)
+        self.metrics_scroll.setMaximumHeight(167)
+        metrics_widget = QWidget()
+        metrics_widget.setMinimumWidth(1130)
+        metrics = QHBoxLayout(metrics_widget)
+        metrics.setContentsMargins(1, 1, 1, 1)
         metrics.setSpacing(8)
         self.graph_gpu = Sparkline('GPU', '%', 100)
         self.graph_vram = Sparkline('VRAM', 'GiB', 22)
@@ -197,8 +209,10 @@ class Window(QMainWindow):
             metrics.addWidget(g, 1)
         self.metrics_label = QLabel('Нет данных GPU')
         self.metrics_label.setWordWrap(True)
+        self.metrics_label.setMinimumWidth(240)
         metrics.addWidget(self.metrics_label, 1)
-        layout.addLayout(metrics)
+        self.metrics_scroll.setWidget(metrics_widget)
+        layout.addWidget(self.metrics_scroll)
 
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
@@ -333,12 +347,15 @@ class Window(QMainWindow):
 
     def open_full_log(self):
         self.choose_log()
-        path = multi.log_path(self.selected_log_alias) if self.selected_log_alias else None
+        self.show_log_dialog(self.selected_log_alias)
+
+    def show_log_dialog(self, alias):
+        path = multi.log_path(alias) if alias else None
         if not path or not path.is_file():
             QMessageBox.information(self, 'Логи', 'Для выбранной модели журнала пока нет.')
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle(f'Журнал {self.selected_log_alias} — {path.name}')
+        dialog.setWindowTitle(f'Журнал {alias} — {path.name}')
         dialog.resize(950, 680)
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel(str(path)))
@@ -360,31 +377,51 @@ class Window(QMainWindow):
 
     # ---------- Models tab ----------
     def build_models(self):
-        w = QWidget(); l = QVBoxLayout(w)
-        split = QSplitter(Qt.Orientation.Horizontal); l.addWidget(split, 1)
+        w = QScrollArea()
+        w.setWidgetResizable(True)
+        content = QWidget()
+        content.setMinimumHeight(565)
+        l = QVBoxLayout(content)
+        split = QSplitter(Qt.Orientation.Horizontal)
+        l.addWidget(split, 1)
+        w.setWidget(content)
         left_wrap = QWidget(); left_layout = QVBoxLayout(left_wrap)
         left_layout.setContentsMargins(0, 0, 0, 0); left_layout.setSpacing(6)
-        self.tree = QTreeWidget(); self.tree.setColumnCount(4)
-        self.tree.setHeaderLabels(['Модель', 'Статус', 'Контекст', 'Назначение'])
+        self.tree = QTreeWidget(); self.tree.setColumnCount(7)
+        self.tree.setHeaderLabels(['Модель', 'Статус', 'Контекст', 'GPU', 'Порт', 'PID', 'Назначение'])
         self.tree.setRootIsDecorated(False)
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.tree.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.tree.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.tree.header().setStretchLastSection(False)
-        for i, width in enumerate(self.settings_data.get('ui_columns', [250, 145, 100, 340])):
-            if i < self.tree.columnCount():
-                self.tree.setColumnWidth(i, max(65, int(width)))
+        widths = self.settings_data.get('ui_columns', [])
+        # v3.2 persisted four columns; migrate without applying the old fourth
+        # column (purpose) to the new fourth column (GPU).
+        if len(widths) != 7:
+            widths = [255, 155, 100, 200, 85, 90, 390]
+        self.tree.header().setMinimumSectionSize(60)
+        for i, width in enumerate(widths):
+            self.tree.header().setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
+            self.tree.setColumnWidth(i, max(60, int(width)))
         self.tree.header().setSectionsMovable(False)
         self.tree.header().sectionResized.connect(self.defer_column_save)
         self.tree.itemDoubleClicked.connect(self.open_selected_in_editor)
         self.tree.currentItemChanged.connect(self.on_model_selected)
         self.tree.setUniformRowHeights(True)
+        # Two rows remain usable even when the splitter is at its narrowest.
+        actions = QGridLayout()
+        actions.addWidget(btn('＋ Добавить', self.add_model, True), 0, 0)
+        actions.addWidget(btn('⧉ Клонировать', self.clone_selected_model), 0, 1)
+        actions.addWidget(btn('－ Удалить', self.delete_selected_model, danger=True), 1, 0)
+        actions.addWidget(btn('✎ Изменить', self.open_selected_in_editor), 1, 1)
+        left_layout.addLayout(actions)
+        self.tree.setMinimumHeight(215)
         left_layout.addWidget(self.tree, 3)
         self.status_label = QLabel('Статус: ожидание'); self.status_label.setObjectName('Subheader')
         self.status_label.setWordWrap(True); left_layout.addWidget(self.status_label)
         logs_group = QGroupBox('Живой журнал выбранной модели'); logs_layout = QVBoxLayout(logs_group)
         self.live_logs = QPlainTextEdit(); self.live_logs.setReadOnly(True)
-        self.live_logs.setMaximumBlockCount(1000); self.live_logs.setMinimumHeight(120)
+        self.live_logs.setMaximumBlockCount(1000); self.live_logs.setMinimumHeight(140)
         logs_layout.addWidget(self.live_logs)
         log_buttons = QHBoxLayout()
         log_buttons.addWidget(btn('Открыть полный лог', self.open_full_log))
@@ -395,7 +432,7 @@ class Window(QMainWindow):
         right = QWidget(); r = QVBoxLayout(right)
         box = QGroupBox('Выбранная модель'); f = QVBoxLayout(box)
         self.model_info = QPlainTextEdit(); self.model_info.setReadOnly(True)
-        self.model_info.setMinimumHeight(200)
+        self.model_info.setMinimumHeight(210)
         f.addWidget(self.model_info, 1)
         self.model_action_btn = QPushButton('● Статус модели')
         self.model_action_btn.clicked.connect(self.model_action)
@@ -406,7 +443,11 @@ class Window(QMainWindow):
         r.addWidget(box)
         hint = QLabel('Каждая модель: свой порт и GPU. Двойной щелчок → редактор.\nШирина колонок сохраняется автоматически.')
         hint.setWordWrap(True); r.addWidget(hint)
-        split.addWidget(right); split.setSizes([650, 560])
+        split.addWidget(right)
+        split.setChildrenCollapsible(False)
+        left_wrap.setMinimumWidth(405)
+        right.setMinimumWidth(330)
+        split.setSizes([680, 510])
         self.column_timer = QTimer(self); self.column_timer.setSingleShot(True)
         self.column_timer.timeout.connect(self.persist_columns)
         self.populate_model_tree()
@@ -428,7 +469,7 @@ class Window(QMainWindow):
         self._tree_loading = True
         self.tree.clear()
         for p in self.cfg.get('models', []):
-            it = QTreeWidgetItem([p.get('name', p['id']), '—', f"{int(p['context']) // 1024}K", p.get('purpose', '—')])
+            it = QTreeWidgetItem([p.get('name', p['id']), '—', f"{int(p['context']) // 1024}K", '—', '—', '—', p.get('purpose', '—')])
             it.setData(0, Qt.ItemDataRole.UserRole, p['id'])
             self.tree.addTopLevelItem(it)
         self._tree_loading = False
@@ -436,16 +477,38 @@ class Window(QMainWindow):
         self.update_model_status_cells()
 
     def update_model_status_cells(self):
-        palette = {'running': ('● Запущена', '#63d6ac'), 'starting': ('● Загрузка', '#ffc578'),
-                   'error': ('● Ошибка', '#e58f9b'), 'external': ('● Порт занят', '#ffc578'), 'port_conflict': ('● Порт занят', '#ffc578'),
-                   'stopped': ('● Остановлена', '#a1b4cf'), 'unstarted': ('○ Не запущена', '#91a4bc')}
+        palette = {
+            'running': ('● Запущена', '#63d6ac'),
+            'starting': ('● Загрузка', '#ffc578'),
+            'error': ('● Ошибка', '#e58f9b'),
+            'external': ('● Порт занят', '#ffc578'),
+            'port_conflict': ('● Порт занят', '#ffc578'),
+            'stopped': ('● Остановлена', '#a1b4cf'),
+            'unstarted': ('○ Не запущена', '#91a4bc'),
+        }
         states = multi.all_states()
         for i in range(self.tree.topLevelItemCount()):
             it = self.tree.topLevelItem(i)
             alias = it.data(0, Qt.ItemDataRole.UserRole)
-            status, color = palette.get(states.get(alias, {}).get('state', 'unstarted'), ('○ Не запущена', '#91a4bc'))
+            profile = self.profile_lookup(alias) or {}
+            state = states.get(alias, {})
+            status, color = palette.get(state.get('state', 'unstarted'), ('○ Не запущена', '#91a4bc'))
             it.setText(1, status)
             it.setForeground(1, QBrush(QColor(color)))
+            live = bool(state.get('managed') and state.get('alive'))
+            gpu = str(state.get('gpu') or profile.get('gpu') or 'авто')
+            gpu_text = gpu if len(gpu) < 23 else gpu[:18] + '…'
+            it.setText(3, gpu_text)
+            it.setToolTip(3, f"GPU {'запущенного сервера' if live else 'в настройках'}: {gpu}")
+            it.setText(4, str(state.get('port') if live else profile.get('port', 8080)))
+            it.setText(5, str(state.get('pid')) if live and state.get('pid') else '—')
+            if not live:
+                for column in (3, 4, 5):
+                    it.setForeground(column, QBrush(QColor('#8295b1')))
+            else:
+                for column in (3, 4, 5):
+                    it.setForeground(column, QBrush(QColor('#e9f0fb')))
+            it.setToolTip(4, 'Фактический порт процесса' if live else 'Порт, заданный в профиле')
 
     def on_model_selected(self, *_):
         p = self.selected_model_profile()
@@ -509,18 +572,44 @@ class Window(QMainWindow):
         self.log_offsets.pop(self.selected_log_alias, None)
         self.update_live_log()
 
+    def clone_selected_model(self):
+        alias = self.selected_alias()
+        if not alias:
+            return
+        self.select_tree_alias(self.settings_tree, alias)
+        self.clone_model()
+
+    def delete_selected_model(self):
+        alias = self.selected_alias()
+        if not alias:
+            return
+        self.select_tree_alias(self.settings_tree, alias)
+        self.delete_model()
+
     def build_services(self):
-        w = QWidget(); l = QVBoxLayout(w)
+        w = QScrollArea()
+        w.setWidgetResizable(True)
+        content = QWidget()
+        content.setMinimumHeight(640)
+        l = QVBoxLayout(content)
+        w.setWidget(content)
         label = QLabel('Все llama.cpp запускаются независимо по портам/GPU. Остановка одного не затрагивает другие серверы.')
         label.setWordWrap(True); l.addWidget(label)
-        self.instances_table = QTableWidget(0, 5)
-        self.instances_table.setHorizontalHeaderLabels(['Модель','GPU','Порт','Статус','PID'])
+        self.instances_table = QTableWidget(0, 6)
+        self.instances_table.setHorizontalHeaderLabels(['Модель', 'GPU', 'Порт', 'Статус', 'PID', 'Время работы'])
         self.instances_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.instances_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.instances_table.setMinimumHeight(190)
+        self.instances_table.setMaximumHeight(270)
         self.instances_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        l.addWidget(self.instances_table, 1)
+        self.instances_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.instances_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.no_instances = QLabel('Нет активных экземпляров llama.cpp')
+        self.no_instances.setObjectName('Subheader')
+        l.addWidget(self.no_instances)
+        l.addWidget(self.instances_table)
         row = QHBoxLayout()
-        row.addWidget(btn('▶ Запустить модель на вкладке «Модели»', lambda: self.tabs.setCurrentIndex(0)))
+        row.addWidget(btn('📄 Лог выбранного', self.open_selected_instance_log))
         row.addWidget(btn('⏹ Остановить выбранный экземпляр', self.stop_selected_instance, danger=True))
         row.addWidget(btn('⏹ Остановить все llama.cpp', self.stop_all_llama, danger=True))
         l.addLayout(row)
@@ -542,15 +631,37 @@ class Window(QMainWindow):
         return w
 
     def update_instances_table(self):
-        current = self.instances_table.currentRow()
-        states = multi.all_states()
-        items = list(states.items())
+        from datetime import datetime
+        previous = self.instances_table.item(self.instances_table.currentRow(), 0)
+        selected_alias = previous.text() if previous else None
+        items = list(multi.active_instances().items())
         self.instances_table.setRowCount(len(items))
-        for i,(alias,s) in enumerate(items):
+        self.no_instances.setVisible(not items)
+        for i, (alias, state) in enumerate(items):
             p = self.profile_lookup(alias) or {}
-            fields = [alias, p.get('gpu') or s.get('gpu') or 'авто', s.get('port',p.get('port',8080)),s.get('state'),s.get('pid','—') if s.get('managed') else '—']
-            for j,value in enumerate(fields): self.instances_table.setItem(i,j,cell(value))
-        if 0 <= current < self.instances_table.rowCount(): self.instances_table.selectRow(current)
+            since = str(state.get('started_at') or '')
+            uptime = '—'
+            if since:
+                try:
+                    elapsed = max(0, int((datetime.now() - datetime.fromisoformat(since)).total_seconds()))
+                    uptime = f'{elapsed // 3600:02}:{(elapsed // 60) % 60:02}:{elapsed % 60:02}'
+                except (ValueError, TypeError):
+                    pass
+            fields = [alias, state.get('gpu') or p.get('gpu') or 'авто',
+                      state.get('port', p.get('port', 8080)), state.get('state'),
+                      state.get('pid') or '—', uptime]
+            for j, value in enumerate(fields):
+                self.instances_table.setItem(i, j, cell(value))
+            if alias == selected_alias:
+                self.instances_table.selectRow(i)
+
+    def open_selected_instance_log(self):
+        row = self.instances_table.currentRow()
+        item = self.instances_table.item(row, 0) if row >= 0 else None
+        if not item:
+            return
+        self.selected_log_alias = item.text()
+        self.show_log_dialog(item.text())
 
     def stop_selected_instance(self):
         row = self.instances_table.currentRow()
@@ -569,8 +680,12 @@ class Window(QMainWindow):
 
     # ---------- Tests tab ----------
     def build_tests(self):
-        w = QWidget()
-        l = QVBoxLayout(w)
+        w = QScrollArea()
+        w.setWidgetResizable(True)
+        content = QWidget()
+        content.setMinimumHeight(580)
+        l = QVBoxLayout(content)
+        w.setWidget(content)
         options = QGroupBox('Встроенные бенчмарки (файлы и отчёты внутри AI Model Lab)')
         form = QGridLayout(options)
         form.addWidget(QLabel('Испытание'), 0, 0)
@@ -700,8 +815,12 @@ class Window(QMainWindow):
 
     # ---------- Reports tab ----------
     def build_results(self):
-        w = QWidget()
-        l = QVBoxLayout(w)
+        w = QScrollArea()
+        w.setWidgetResizable(True)
+        content = QWidget()
+        content.setMinimumHeight(560)
+        l = QVBoxLayout(content)
+        w.setWidget(content)
         row = QHBoxLayout()
         row.addWidget(btn('↻ Обновить отчёты', self.refresh_reports))
         row.addWidget(btn('🔎 Сравнить два выбранных', self.compare_reports))
@@ -793,7 +912,12 @@ class Window(QMainWindow):
         return next((p for p in self.cfg.get('models',[]) if p.get('id') == alias), None)
 
     def build_settings(self):
-        w=QWidget(); l=QVBoxLayout(w)
+        w = QScrollArea()
+        w.setWidgetResizable(True)
+        content = QWidget()
+        content.setMinimumHeight(770)
+        l = QVBoxLayout(content)
+        w.setWidget(content)
         common=QGroupBox('Общие настройки программы'); f=QFormLayout(common)
         self.set_inputs={}
         for key,label in [('android_project','Каталог Android-проекта'),('office_dir','Каталог Agent Office'),
@@ -801,7 +925,10 @@ class Window(QMainWindow):
                           ('webui_service','Служба WebUI'),('gpu_index','GPU для графика nvidia-smi')]:
             inp=QLineEdit(str(self.settings_data.get(key,''))); self.set_inputs[key]=inp; f.addRow(label,inp)
         l.addWidget(common)
-        split=QSplitter(Qt.Orientation.Horizontal); l.addWidget(split,1)
+        split=QSplitter(Qt.Orientation.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setMinimumHeight(445)
+        l.addWidget(split,1)
         left=QWidget(); lv=QVBoxLayout(left)
         controls=QHBoxLayout()
         controls.addWidget(btn('＋ Добавить',self.add_model,True))
@@ -853,9 +980,20 @@ class Window(QMainWindow):
         ef['purpose']=QPlainTextEdit(); ef['purpose'].setMaximumHeight(90); f.addRow('Назначение',ef['purpose'])
         f.addRow('Контекст (токены)',spin('context',4096,524288,32768))
         f.addRow('Порт API',spin('port',1024,65535,8080))
-        f.addRow('GPU (0, 1 или UUID)',text('gpu'))
-        self.gpu_info=QLabel('\n'.join(multi.available_gpu_ids()) or 'GPU не обнаружены через nvidia-smi')
-        self.gpu_info.setWordWrap(True); f.addRow('Найденные GPU',self.gpu_info)
+        ef['gpu'] = QComboBox()
+        ef['gpu'].setEditable(True)
+        ef['gpu'].setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        ef['gpu'].setToolTip('Для двух одинаковых GPU рекомендуется полный NVIDIA UUID. Также допустим индекс 0, 1…')
+        self.populate_gpu_choices()
+        f.addRow('GPU (UUID или индекс)', ef['gpu'])
+        self.gpu_info=QPlainTextEdit()
+        self.gpu_info.setReadOnly(True)
+        self.gpu_info.setMinimumHeight(105)
+        self.gpu_info.setMaximumHeight(145)
+        self.gpu_info.setPlainText('\n'.join(multi.available_gpu_ids()) or 'GPU не обнаружены через nvidia-smi')
+        self.gpu_info.setToolTip('Фактические индексы, имена, UUID и VRAM из nvidia-smi')
+        f.addRow('Найденные GPU',self.gpu_info)
+        f.addRow('', btn('↻ Обновить список GPU', self.refresh_gpu_inventory))
         f.addRow('Путь GGUF (относительный)',text('path'))
         f.addRow('Шаблон GGUF',text('match'))
         f.addRow('Доп. аргументы llama.cpp',text('extra_args'))
@@ -896,8 +1034,37 @@ class Window(QMainWindow):
                 widget.valueChanged.connect(self.mark_editor_dirty)
             elif isinstance(widget,QComboBox):
                 widget.currentIndexChanged.connect(self.mark_editor_dirty)
+                if widget.isEditable():
+                    widget.editTextChanged.connect(self.mark_editor_dirty)
             elif isinstance(widget,QCheckBox):
                 widget.stateChanged.connect(self.mark_editor_dirty)
+
+    def populate_gpu_choices(self):
+        picker = self.edit_fields['gpu']
+        picker.clear()
+        picker.addItem('Авто (llama.cpp выберет GPU)', '')
+        for entry in multi.gpu_inventory():
+            idx, name, uuid, memory = entry['index'], entry['name'], entry['uuid'], entry['memory']
+            picker.addItem(f"GPU {idx}: {name} ({memory}) · {uuid}", uuid)
+            picker.setItemData(picker.count() - 1, 'Назначить только этот GPU по UUID', Qt.ItemDataRole.ToolTipRole)
+            picker.addItem(f"GPU {idx}: индекс {idx} (менее стабильно)", str(idx))
+
+    def refresh_gpu_inventory(self):
+        selected = self.editor_gpu_value()
+        self.populate_gpu_choices()
+        index = self.edit_fields['gpu'].findData(selected)
+        if index >= 0:
+            self.edit_fields['gpu'].setCurrentIndex(index)
+        else:
+            self.edit_fields['gpu'].setEditText(selected)
+        self.gpu_info.setPlainText('\n'.join(multi.available_gpu_ids()) or 'GPU не обнаружены через nvidia-smi')
+
+    def editor_gpu_value(self):
+        picker = self.edit_fields['gpu']
+        index = picker.currentIndex()
+        if index >= 0 and picker.currentText() == picker.itemText(index):
+            return str(picker.itemData(index) or '')
+        return picker.currentText().strip()
 
     def populate_settings_tree(self):
         self.settings_tree.clear()
@@ -924,8 +1091,14 @@ class Window(QMainWindow):
         try:
             ef=self.edit_fields
             def set_line(k,value): ef[k].setText(str(value or ''))
-            for k in ('id','name','path','match','gpu','mmproj'):
+            for k in ('id','name','path','match','mmproj'):
                 set_line(k,profile.get(k,''))
+            current_gpu = str(profile.get('gpu') or '')
+            choice = ef['gpu'].findData(current_gpu)
+            if choice >= 0:
+                ef['gpu'].setCurrentIndex(choice)
+            else:
+                ef['gpu'].setEditText(current_gpu)
             ef['purpose'].setPlainText(profile.get('purpose',''))
             for key,default in [('context',32768),('port',8080),('ngl',99),('n_cpu_moe',0),('parallel',1),
                                 ('batch',1024),('ubatch',256),('image_min_tokens',0)]:
@@ -977,9 +1150,10 @@ class Window(QMainWindow):
         alias=multi.validate_alias(ef['id'].text().strip())
         original=self.profile_lookup(self.editor_current_alias) or {}
         profile=dict(original)
-        for k in ('name','path','match','gpu','mmproj','purpose','extra_args'):
+        for k in ('name','path','match','mmproj','purpose','extra_args'):
             value=ef[k].toPlainText().strip() if k=='purpose' else ef[k].text().strip()
             profile[k]=value
+        profile['gpu'] = self.editor_gpu_value()
         profile['id']=alias
         for k in ('context','port','ngl','n_cpu_moe','parallel','batch','ubatch','image_min_tokens'):
             profile[k]=int(ef[k].value())

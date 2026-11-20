@@ -5,6 +5,17 @@ SOURCE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 DEST="${AI_MODEL_LAB_HOME:-$HOME/AI/AI-Model-Lab}"
 mkdir -p "$DEST" "$HOME/.local/bin" "$HOME/.local/share/applications"
 
+# Copy previously installed program code into a dated rollback directory.
+# User profiles, reports and runtime records remain in their original paths.
+if [[ -f "$DEST/gui.py" ]]; then
+  BACKUP="$DEST/data/backups/release-$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$BACKUP"
+  for f in core.py multi.py gui.py bench.py run.sh install.sh; do
+    if [[ -f "$DEST/$f" ]]; then cp -p "$DEST/$f" "$BACKUP/$f"; fi
+  done
+  printf 'Резервная копия прежнего кода: %s\n' "$BACKUP"
+fi
+
 # Preserve existing profiles and reports when upgrading.
 for name in core.py multi.py gui.py bench.py run.sh README_RU.md; do
   install -m 0644 "$SOURCE/$name" "$DEST/$name"

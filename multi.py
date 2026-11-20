@@ -101,8 +101,11 @@ def inspect(alias):
     """
     m = metadata(alias)
     p = profile_by_id(alias) or {'port': m.get('port', 8080)}
-    port = int(m.get('port', port_of(p)))
-    if owned(m):
+    # Metadata stores the *last* launch port. For a stopped model, respect the
+    # newly edited profile port; for a live process, use its actual launch port.
+    live = owned(m)
+    port = int(m.get('port', port_of(p))) if live else port_of(p)
+    if live:
         active = core.json_api(f'http://127.0.0.1:{port}/health', timeout=.3)
         running = isinstance(active, dict) and active.get('status') == 'ok'
         stage = 'running' if running else 'starting'
@@ -153,6 +156,7 @@ def launch(alias):
         raise ValueError('Неизвестный профиль: ' + alias)
     port = port_of(p)
     gpu = gpu_of(p)
+    verify_gpu_selection(gpu)
     cmd = core.server_command(p)
     core.prepare()
     with locked():
@@ -169,6 +173,7 @@ def launch(alias):
         log = core.LOGS / f'llama_{alias}_{dt.datetime.now():%Y%m%d_%H%M%S}.log'
         env = os.environ.copy()
         if gpu:
+            env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
             env['CUDA_VISIBLE_DEVICES'] = gpu
         with log.open('ab', buffering=0) as stream:
             child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=stream,
@@ -245,13 +250,45 @@ def log_path(alias):
     return Path(path)
 
 
-def available_gpu_ids():
-    """Display hints; CUDA_VISIBLE_DEVICES may also accept a GPU UUID."""
+def gpu_inventory():
+    """Structured NVIDIA inventory: host index, name, full UUID and total VRAM.
+
+    UUID is the recommended stable identifier for two identical cards. When a
+    profile selects one UUID, CUDA_VISIBLE_DEVICES exposes only that physical
+    GPU to its llama.cpp child (where it is reindexed to CUDA device 0).
+    """
     try:
         r = subprocess.run(['nvidia-smi', '--query-gpu=index,name,uuid,memory.total',
-                           '--format=csv,noheader'], capture_output=True, text=True, timeout=3)
+                            '--format=csv,noheader'], capture_output=True, text=True, timeout=3)
         if r.returncode:
             return []
-        return [v.strip() for v in r.stdout.splitlines() if v.strip()]
+        result = []
+        for line in r.stdout.splitlines():
+            parts = [v.strip() for v in line.split(',', 3)]
+            if len(parts) == 4 and parts[0].isdigit() and parts[2].startswith('GPU-'):
+                result.append(dict(index=int(parts[0]), name=parts[1], uuid=parts[2], memory=parts[3]))
+        return result
     except (OSError, subprocess.TimeoutExpired):
         return []
+
+
+def available_gpu_ids():
+    return [f"{v['index']}, {v['name']}, {v['uuid']}, {v['memory']}" for v in gpu_inventory()]
+
+
+def verify_gpu_selection(selection):
+    """Validate a configured GPU against the actual NVIDIA inventory.
+
+    Never silently fall back to CPU/another GPU when a particular card was
+    explicitly requested. A missing GPU can mean a removed card or stale UUID.
+    """
+    gpu = gpu_of({'gpu': selection})
+    if not gpu:
+        return
+    inventory = gpu_inventory()
+    if not inventory:
+        raise RuntimeError('Указан GPU, но nvidia-smi не обнаружил видеокарты. Запуск отменён.')
+    allowed = {str(v['index']) for v in inventory} | {v['uuid'] for v in inventory}
+    if gpu not in allowed:
+        raise RuntimeError(f'GPU {gpu} не обнаружен. Доступны: ' + ', '.join(
+            f"{v['index']} ({v['uuid']})" for v in inventory))
