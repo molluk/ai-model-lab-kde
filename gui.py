@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.6 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE v3.7 — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
@@ -64,6 +64,9 @@ QTreeWidget,QTableWidget,QTextEdit,QPlainTextEdit,QLineEdit,QComboBox,QSpinBox,Q
 QHeaderView::section {{ background:#25344a;color:#dfe9f7;border-right:2px solid #56708c;
                            border-bottom:2px solid #56708c;padding:8px; }}
 QTreeWidget::item {{ border-right:1px solid #2b3e57;border-bottom:1px solid #25364b; }}
+QTreeWidget::item:selected {{ background:#235b94;color:#ffffff;border-bottom:1px solid #83c6ff; }}
+QTreeWidget::item:selected:!active {{ background:#285176;color:#ffffff;border-bottom:1px solid #6eaddd; }}
+QTreeWidget::item:hover:!selected {{ background:#223950; }}
 QScrollBar:vertical {{ background:#1e2a3a;width:10px; }}
 QScrollBar::handle:vertical {{ background:#536983;border-radius:4px; }}
 QScrollBar:horizontal {{ background:#1e2a3a;height:10px; }}
@@ -380,12 +383,80 @@ class Window(QMainWindow):
     def open_url(self, url):
         QDesktopServices.openUrl(QUrl(url))
 
+    def show_missing_client_help(self, client):
+        commands = {
+            'pi': ('Pi', 'npm install -g @mariozechner/pi-coding-agent',
+                   'https://www.npmjs.com/package/@mariozechner/pi-coding-agent'),
+            'opencode': ('OpenCode', 'npm install -g @opencode/cli',
+                         'https://opencode.ai/docs/'),
+        }
+        name, command, url = commands.get(client, (client, '', ''))
+        msg = QMessageBox(self)
+        msg.setWindowTitle(f'Установка {name}')
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText(f'Клиент {name} не найден в PATH приложения.')
+        msg.setInformativeText(
+            f'Установка через Node.js/npm:\n{command}\n\n'
+            f'Документация: {url}\n\n'
+            'Если приложение уже установлено, проверь путь к исполняемому файлу '
+            'и переменную PATH среды KDE. Для запуска клиента сервер модели должен работать.'
+        )
+        copy_cmd = msg.addButton('Копировать команду', QMessageBox.ButtonRole.ActionRole)
+        docs = msg.addButton('Открыть документацию', QMessageBox.ButtonRole.ActionRole)
+        msg.addButton('Закрыть', QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() is copy_cmd:
+            QApplication.clipboard().setText(command)
+        elif msg.clickedButton() is docs:
+            self.open_url(url)
+
+    def open_webui(self):
+        if core.port_open(3000):
+            self.open_url('http://127.0.0.1:3000')
+            return
+        msg = QMessageBox(self)
+        msg.setWindowTitle('Open WebUI не запущен')
+        msg.setText('Open WebUI не отвечает на 127.0.0.1:3000.')
+        msg.setInformativeText(
+            'Если сервис установлен, запусти его на вкладке «Управление» '
+            'или через systemctl --user start open-webui.service.\n'
+            'Если не установлен, см. https://docs.openwebui.com/getting-started/quick-start/.'
+        )
+        start = msg.addButton('Перейти к управлению', QMessageBox.ButtonRole.ActionRole)
+        docs = msg.addButton('Документация', QMessageBox.ButtonRole.ActionRole)
+        msg.addButton('Закрыть', QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() is start:
+            self.tabs.setCurrentIndex(1)
+        elif msg.clickedButton() is docs:
+            self.open_url('https://docs.openwebui.com/getting-started/quick-start/')
+
     def open_office(self):
         url = core.office_url()
-        if url:
-            self.open_url(url)
-        else:
-            QMessageBox.information(self, 'Agent Office', 'Не удалось определить веб-адрес. Укажи office_url в настройках или проверь журнал Agent Office.')
+        if url and (url.startswith('http://127.0.0.1:') or url.startswith('http://localhost:')):
+            port = url.rsplit(':',1)[-1].split('/')[0]
+            if port.isdigit() and core.port_open(int(port)):
+                self.open_url(url)
+                return
+        directory = core.office_path()
+        is_installed = (directory / 'run.py').is_file()
+        msg = QMessageBox(self)
+        msg.setWindowTitle('Agent Office недоступен')
+        msg.setText('Agent Office не запущен или его адрес не определён.' if is_installed else 'Agent Office не установлен по указанному пути.')
+        msg.setInformativeText(
+            f'Проверяемый каталог: {directory}\n'
+            + ('Открой вкладку «Управление» и запусти Agent Office. При необходимости укажи office_url в настройках.'
+               if is_installed else
+               'Укажи правильный каталог на вкладке «Настройки». Исходный проект: https://github.com/NosytLabs/agent-office')
+        )
+        manage = msg.addButton('Открыть управление', QMessageBox.ButtonRole.ActionRole)
+        docs = msg.addButton('Открыть GitHub', QMessageBox.ButtonRole.ActionRole)
+        msg.addButton('Закрыть', QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() is manage:
+            self.tabs.setCurrentIndex(1)
+        elif msg.clickedButton() is docs:
+            self.open_url('https://github.com/NosytLabs/agent-office')
 
     def copy_selected_api(self):
         alias = self.selected_alias()
@@ -399,36 +470,89 @@ class Window(QMainWindow):
             QMessageBox.warning(self, 'API модели', str(exc))
 
     def open_preferred_client(self):
-        profile = self.selected_model_profile()
-        if profile:
-            self.open_model_client(client_launcher.preferred_client(profile))
+        if hasattr(self, 'client_combo'):
+            client = self.client_combo.currentData()
+            if client:
+                self.open_model_client(client)
 
     def refresh_preferred_client_button(self):
-        if not hasattr(self, 'client_menu_button'):
+        """Selection is editable independently of server readiness."""
+        if not hasattr(self, 'client_combo'):
             return
         profile = self.selected_model_profile()
-        preferred = client_launcher.preferred_client(profile)
-        title = {'pi': 'Pi', 'opencode': 'OpenCode'}.get(preferred, preferred)
-        self.client_menu_button.setText(f'⌘ Открыть в {title}   ▾')
-        self.client_menu_button.setToolTip(f'Основной клиент для этой модели: {title}. Стрелка справа открывает альтернативы.')
+        chosen = client_launcher.preferred_client(profile)
+        self.client_combo.blockSignals(True)
+        idx = self.client_combo.findData(chosen)
+        self.client_combo.setCurrentIndex(max(idx, 0))
+        self.client_combo.blockSignals(False)
+        self.update_client_hint()
+
+    def update_client_hint(self):
+        if not hasattr(self, 'client_combo'):
+            return
+        client = self.client_combo.currentData()
+        try:
+            client_launcher.find_executable(client)
+            description = f'{client.capitalize()} найден. Выбор клиента сохраняется сразу и не запускает модель.'
+        except (FileNotFoundError, ValueError):
+            description = f'{client.capitalize()} пока не найден. Выбор сохранится; установка — кнопка «?». '
+        self.client_hint.setText(description)
+
+    def on_client_preference_changed(self, _index):
+        """Persist just one field, without requiring a running llama-server."""
+        alias = self.selected_alias()
+        client = self.client_combo.currentData()
+        if not alias or client not in client_launcher.CLIENTS:
+            return
+        profile = self.profile_lookup(alias)
+        if profile is None:
+            return
+        previous = profile.get('preferred_client')
+        try:
+            updated = core.update_model_client_preference(alias, client)
+            self.cfg = updated
+        except Exception as exc:
+            QMessageBox.warning(self, 'Не удалось сохранить клиент', str(exc))
+            self.refresh_preferred_client_button()
+            return
+        # Keep the open editor in sync without losing unsaved changes to other fields.
+        if getattr(self, 'editor_current_alias', None) == alias and hasattr(self, 'edit_fields'):
+            editor_choice = self.edit_fields.get('preferred_client')
+            if editor_choice:
+                editor_choice.blockSignals(True)
+                idx = editor_choice.findData(client)
+                editor_choice.setCurrentIndex(max(0, idx))
+                editor_choice.blockSignals(False)
+        self.update_client_hint()
+        self.model_info.setPlainText(self.model_info.toPlainText().replace(
+            'Клиент по умолчанию: ' + str(previous or client_launcher.preferred_client({'id': alias})),
+            'Клиент по умолчанию: ' + client))
+        self.set_message(f'{alias}: клиент по умолчанию — {client} (сохранено в models.json)')
 
     def open_model_client(self, client):
         alias = self.selected_alias()
         if not alias:
             return
         try:
-            info = client_launcher.effective_instance(alias)
             client_launcher.find_executable(client)
+        except FileNotFoundError:
+            self.show_missing_client_help(client)
+            return
+        try:
+            info = client_launcher.effective_instance(alias)
             folder = client_launcher.workspace_dir()
             terminal = shutil.which('konsole')
             if not terminal:
-                raise FileNotFoundError('Не найдена Konsole. Установи её или сообщи используемый терминал.')
+                raise FileNotFoundError('Не найдена Konsole. Для CachyOS: sudo pacman -S konsole')
             argv = [terminal, '--noclose', '-e', sys.executable, '-u',
                     str(core.ROOT / 'client_launcher.py'), '--client', client,
                     '--model', alias]
             subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
             self.set_message(f"Открываю {client} → {alias} :{info['port']} · папка {folder}")
+        except RuntimeError as exc:
+            QMessageBox.information(self, 'Запуск клиента',
+                                    f'{exc}\n\nПредпочитаемый клиент можно выбрать и сохранить без запуска модели.')
         except Exception as exc:
             QMessageBox.warning(self, 'Открытие ИИ-клиента', str(exc))
 
@@ -528,6 +652,9 @@ class Window(QMainWindow):
         self.tree = QTreeWidget(); self.tree.setColumnCount(7)
         self.tree.setHeaderLabels(['Модель', 'Статус', 'Контекст', 'GPU', 'Порт', 'PID', 'Назначение'])
         self.tree.setRootIsDecorated(False)
+        self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tree.setAllColumnsShowFocus(True)
         self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.tree.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.tree.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -576,22 +703,28 @@ class Window(QMainWindow):
         self.model_action_btn = QPushButton('● Статус модели')
         self.model_action_btn.clicked.connect(self.model_action)
         f.addWidget(self.model_action_btn)
-        self.client_menu_button = QToolButton()
-        self.client_menu_button.setText('⌘ Открыть в Pi   ▾')
-        self.client_menu_button.setToolTip('Щелчок запускает предпочтительный клиент модели; стрелка справа — другой клиент.')
-        self.client_menu_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        self.client_menu_button.clicked.connect(self.open_preferred_client)
-        self.client_menu_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        menu = QMenu(self.client_menu_button)
-        menu.addAction('OpenCode — агент разработки', lambda: self.open_model_client('opencode'))
-        menu.addAction('Pi — агент разработки', lambda: self.open_model_client('pi'))
-        menu.addSeparator()
-        menu.addAction('Скопировать локальный API /v1', self.copy_selected_api)
-        self.client_menu_button.setMenu(menu)
-        self.client_menu_button.setMinimumHeight(34)
-        f.addWidget(self.client_menu_button)
+        client_row = QHBoxLayout()
+        self.client_open_btn = btn('⌘ Открыть в', self.open_preferred_client, primary=True)
+        self.client_open_btn.setToolTip('Запустить выбранный клиент для работающей модели')
+        client_row.addWidget(self.client_open_btn, 1)
+        self.client_combo = QComboBox()
+        self.client_combo.addItem('Pi', 'pi')
+        self.client_combo.addItem('OpenCode', 'opencode')
+        self.client_combo.setMinimumWidth(125)
+        self.client_combo.setToolTip('Предпочитаемый клиент: выбор сохраняется даже если модель остановлена')
+        self.client_combo.currentIndexChanged.connect(self.on_client_preference_changed)
+        client_row.addWidget(self.client_combo, 1)
+        self.client_install_btn = btn('?', lambda: self.show_missing_client_help(self.client_combo.currentData()))
+        self.client_install_btn.setToolTip('Инструкция по установке выбранного клиента')
+        self.client_install_btn.setFixedWidth(34)
+        client_row.addWidget(self.client_install_btn)
+        f.addLayout(client_row)
+        self.client_hint = QLabel('Выбор клиента сохраняется независимо от состояния модели')
+        self.client_hint.setWordWrap(True)
+        self.client_hint.setStyleSheet('color:#a1b4cf;font-size:11px;')
+        f.addWidget(self.client_hint)
         f.addWidget(btn('✎ Редактировать параметры', self.open_selected_in_editor))
-        f.addWidget(btn('🌐 Открыть WebUI', lambda: self.open_url('http://127.0.0.1:3000')))
+        f.addWidget(btn('🌐 Открыть WebUI', self.open_webui))
         f.addWidget(btn('🏢 Открыть Agent Office', self.open_office))
         r.addWidget(box)
         hint = QLabel('Каждая модель: свой порт и GPU. Двойной щелчок → редактор.\nШирина колонок сохраняется автоматически.')
@@ -769,7 +902,7 @@ class Window(QMainWindow):
         l.addLayout(row)
         self.service_labels = {}
         services = [
-            ('webui', 'Open WebUI · :3000', core.webui_start, core.webui_stop, lambda: self.open_url('http://127.0.0.1:3000')),
+            ('webui', 'Open WebUI · :3000', core.webui_start, core.webui_stop, self.open_webui),
             ('office', 'Agent Office', core.office_start, lambda: core.stop('office'), self.open_office),
             ('comfy', 'ComfyUI · :8188', core.comfy_start, lambda: core.stop('comfy'), lambda: self.open_url('http://127.0.0.1:8188')),
         ]

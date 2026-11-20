@@ -458,3 +458,31 @@ def cleanup_artifacts(log_days=0, report_days=0, keep_log_paths=None):
             except OSError as exc:
                 stats['errors'].append(f'report {root.name}: {exc}')
     return stats
+
+
+def update_model_client_preference(alias, client):
+    """Persist preferred client for a stopped or running profile, without starting it.
+
+    Does not mutate global Pi/OpenCode configuration. The caller keeps its UI
+    cache in sync after this function succeeds.
+    """
+    if client not in ('pi', 'opencode'):
+        raise ValueError('Поддерживаются только Pi и OpenCode')
+    data = load_json(MODELS)
+    if not isinstance(data, dict) or not isinstance(data.get('models'), list):
+        raise ValueError('Не найден корректный models.json')
+    matches = [p for p in data['models'] if p.get('id') == alias]
+    if len(matches) != 1:
+        raise ValueError('Не найден уникальный профиль: ' + str(alias))
+    matches[0]['preferred_client'] = client
+    prepare()
+    backups = DATA / 'backups'
+    backups.mkdir(parents=True, exist_ok=True)
+    if MODELS.is_file():
+        filename = 'models_client_' + dt.datetime.now().strftime('%Y%m%d_%H%M%S_%f') + '.json'
+        import shutil as _shutil
+        _shutil.copy2(MODELS, backups / filename)
+    atomic_json(MODELS, data)
+    for older in sorted(backups.glob('models_client_*.json'))[:-20]:
+        older.unlink(missing_ok=True)
+    return data

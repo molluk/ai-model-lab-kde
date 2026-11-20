@@ -1,19 +1,92 @@
 {
-  "version": "3.6",
+  "version": "3.7",
   "model_root": "~/AI/models",
   "server_bin": "~/llama.cpp/build/bin/llama-server",
   "models": [
     {
-      "id": "example-model",
-      "name": "Example GGUF model",
-      "purpose": "Example local model",
+      "id": "blend-q4",
+      "name": "Blend Q4 demo",
+      "purpose": "Example profile; specify actual GGUF path before launch",
       "path": "",
       "match": "*.gguf",
-      "context": 8192,
+      "context": 131072,
       "port": 8080,
       "gpu": "",
       "thinking_off": false,
       "preferred_client": "pi"
+    },
+    {
+      "id": "blend-q5",
+      "name": "Blend Q5 demo",
+      "purpose": "Example profile; specify actual GGUF path before launch",
+      "path": "",
+      "match": "*.gguf",
+      "context": 32768,
+      "port": 8080,
+      "gpu": "",
+      "thinking_off": false,
+      "preferred_client": "pi"
+    },
+    {
+      "id": "qwen38-27b",
+      "name": "Qwen 27B demo",
+      "purpose": "Example profile; specify actual GGUF path before launch",
+      "path": "",
+      "match": "*.gguf",
+      "context": 131072,
+      "port": 8080,
+      "gpu": "",
+      "thinking_off": false,
+      "preferred_client": "pi"
+    },
+    {
+      "id": "coder-30b",
+      "name": "Coder 30B demo",
+      "purpose": "Example profile; specify actual GGUF path before launch",
+      "path": "",
+      "match": "*.gguf",
+      "context": 131072,
+      "port": 8080,
+      "gpu": "",
+      "thinking_off": false,
+      "preferred_client": "opencode"
+    },
+    {
+      "id": "coder-30b-ud",
+      "name": "Coder 30B UD demo",
+      "purpose": "Example profile; specify actual GGUF path before launch",
+      "path": "",
+      "match": "*.gguf",
+      "context": 98304,
+      "port": 8080,
+      "gpu": "",
+      "thinking_off": false,
+      "preferred_client": "opencode"
+    },
+    {
+      "id": "qwen3-vl-30b",
+      "name": "Vision model demo",
+      "purpose": "Example profile; specify actual GGUF path before launch",
+      "path": "",
+      "match": "*.gguf",
+      "context": 32768,
+      "port": 8080,
+      "gpu": "",
+      "thinking_off": false,
+      "preferred_client": "pi",
+      "mmproj": "replace-with-mmproj.gguf"
+    },
+    {
+      "id": "devstral-24b",
+      "name": "Devstral demo",
+      "purpose": "Example profile; specify actual GGUF path before launch",
+      "path": "",
+      "match": "*.gguf",
+      "context": 32768,
+      "port": 8080,
+      "gpu": "",
+      "thinking_off": false,
+      "preferred_client": "opencode"
     }
   ]
 }

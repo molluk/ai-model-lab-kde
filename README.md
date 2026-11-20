@@ -1,4 +1,4 @@
-# AI Model Lab (KDE) — pre-release source
+# AI Model Lab (KDE) — v3.7 source with reconstructed release history
 
 A local Python/Qt6 application for managing independent llama.cpp servers, GPU affinity,
 Open WebUI / Agent Office / ComfyUI, launching Pi or OpenCode, and offline benchmarks.
@@ -41,11 +41,13 @@ need real-device testing.
 Do not commit `data/`, actual `models.json` or `settings.json`, API keys, private
 Android sources, model weights, or chat history. See [SECURITY.md](SECURITY.md).
 
-**Public-release TODO:** replace the two private-project-specific STB/VOD prompt
-files with generic benchmark scenarios. They are intentionally excluded by
-`.gitignore`, so a development checkout does not contain these tasks until
-new prompts are added. Do not advertise P1/P2 as runnable in a public source
-checkout until this is addressed.
+**Public benchmarks:** two generic Android source-navigation prompts are supplied
+under `benchmarks/prompts/` for demonstration. They are **not** the original
+project-specific private benchmark prompts; scores must not be compared to
+pre-release benchmark archives. See `HISTORY_PROVENANCE.md`.
+
+The model catalog bundled with this public source is an example only. Set your own
+GGUF paths and endpoints before launching a model.
 
 ## License
 

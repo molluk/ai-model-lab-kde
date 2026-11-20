@@ -17,7 +17,4 @@ venv/
 models.json
 settings.json
 
-# These two prompts were tailored to a non-public Android project. Replace with
-# generic public benchmarks and review copyright before committing them.
-benchmarks/prompts/LP-P1-STB-ui.md
-benchmarks/prompts/LP-P2-STB-player.md
+# Public benchmark prompts in benchmarks/prompts/ are generic samples.
