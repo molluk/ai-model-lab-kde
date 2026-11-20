@@ -94,5 +94,77 @@ class ModelLabTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             lab.choose_file(self.cfg,p)
 
+# Additional UI/service tests are defined in a separate class so existing
+# v2 tests remain unmodified. No real subprocess/service is launched.
+class V21MenusTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = json.loads((TARGET/'models.json').read_text(encoding='utf8'))
+
+    def test_purposes_even_with_old_installed_config(self):
+        for p in self.cfg['models']:
+            old = dict(p)
+            old.pop('purpose', None)
+            self.assertTrue(lab.purpose(old))
+            self.assertTrue(lab.purpose(p))
+
+    def test_after_model_routes_into_both_submenus(self):
+        from unittest.mock import patch
+        with patch.object(lab, 'current_model_alias', return_value='blend-q4'), \
+             patch('builtins.input', side_effect=['5','6','0']), \
+             patch.object(lab, 'tests_menu') as tests, \
+             patch.object(lab, 'management_menu') as management:
+            lab.menu_after_model(self.cfg, 'blend-q4')
+        tests.assert_called_once_with(self.cfg)
+        management.assert_called_once_with(self.cfg)
+
+    def test_management_individual_webui_stop_only(self):
+        from unittest.mock import patch
+        with patch('builtins.input', side_effect=['5','0']), \
+             patch.object(lab, 'stop_webui') as stop_webui, \
+             patch.object(lab, 'stop_owned') as stop_owned, \
+             patch.object(lab, 'stop_office') as stop_office:
+            lab.management_menu(self.cfg)
+        stop_webui.assert_called_once_with()
+        stop_owned.assert_not_called()
+        stop_office.assert_not_called()
+
+    def test_management_test_entry_does_not_stop_server(self):
+        from unittest.mock import patch
+        with patch('builtins.input', side_effect=['t','m','0']), \
+             patch.object(lab, 'tests_menu') as tests, \
+             patch.object(lab, 'management_menu') as manager, \
+             patch.object(lab, 'stop_all') as stopall:
+            lab.main_menu(self.cfg)
+        tests.assert_called_once_with(self.cfg)
+        manager.assert_called_once_with(self.cfg)
+        stopall.assert_not_called()
+
+    def test_unsupported_benchmark_model_cannot_run(self):
+        from unittest.mock import patch
+        with patch.object(lab, 'current_model_alias', return_value='qwen3-vl-30b'), \
+             patch.object(lab.subprocess, 'run') as run:
+            self.assertFalse(lab.run_android_benchmark('P1'))
+            run.assert_not_called()
+
+    def test_benchmark_context_mismatch_blocks_launch(self):
+        from unittest.mock import patch
+        pi = {'providers':{'local-lab':{'models':[{'id':'blend-q4','contextWindow':16384}]}}}
+        with tempfile.TemporaryDirectory() as directory:
+            benchmark = Path(directory) / 'run-LP-01A-comparison.fish'
+            benchmark.touch()
+            saved = lab.BENCH_SCRIPT
+            lab.BENCH_SCRIPT = benchmark
+            original_read = lab.read_json
+            try:
+                with patch.object(lab, 'current_model_alias', return_value='blend-q4'), \
+                     patch.object(lab, 'http_json', return_value={'default_generation_settings':{'n_ctx':131072}}), \
+                     patch.object(lab, 'read_json', return_value=pi), \
+                     patch.object(lab.shutil, 'which', return_value='/usr/bin/fish'), \
+                     patch.object(lab.subprocess, 'run') as run:
+                    self.assertFalse(lab.run_android_benchmark('P1'))
+                    run.assert_not_called()
+            finally:
+                lab.BENCH_SCRIPT = saved
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab v2 — local controller, stdlib only, no external connections.
+"""AI Model Lab v2.1 — local controller, stdlib only, no external connections.
 User-facing CLI & terminal UI. No pkill, no writes to Android repositories or Pi.
 """
 import argparse
@@ -27,6 +27,33 @@ API = "http://127.0.0.1:8080"
 WEBUI = "http://127.0.0.1:3000"
 SERVER_STATE = STATE / "llama.json"
 COMFY_STATE = STATE / "comfy.json"
+
+# Fallbacks also work with the user's existing models.json from v2.
+DEFAULT_PURPOSES = {
+    "blend-q4": "Android-архитектура и глубокий анализ кода",
+    "blend-q5": "Сравнение качества квантизации Q5",
+    "qwen38-27b": "Независимый Android-анализ и ревью",
+    "coder-30b": "Быстрые задачи программирования и патчи",
+    "coder-30b-ud": "Экспериментальный Coder без фильтров",
+    "qwen3-vl-30b": "Изображения, интерфейсы, дизайн",
+    "devstral-24b": "Быстрое программирование и правки",
+}
+BENCH_ALIASES = {"blend-q4", "qwen38-27b", "coder-30b"}
+LAB_DIR = Path(os.environ.get("AI_BENCHMARK_LAB", "/home/USER/AI/benchmark-kit"))
+BENCH_SCRIPT = LAB_DIR / "suites/android-large-project-v1/run-LP-01A-comparison.fish"
+
+
+def purpose(profile):
+    return profile.get("purpose") or DEFAULT_PURPOSES.get(profile["id"], "Назначение не указано")
+
+
+def profile_for(cfg, alias):
+    return next((p for p in cfg["models"] if p["id"] == alias), None)
+
+
+def current_model_alias():
+    props = http_json(API + "/props")
+    return (props or {}).get("model_alias")
 
 
 def say(message=""):
@@ -366,7 +393,7 @@ def find_office_url():
     return None
 
 
-def start_office():
+def start_office(open_it=True):
     script = HOME / ".local/bin/start-agent-office.sh"
     if not script.is_file():
         error("Нет старого start-agent-office.sh; укажи верный путь")
@@ -379,7 +406,8 @@ def start_office():
     url = find_office_url()
     if url:
         say(f"Agent Office: {url}")
-        open_browser(url, app_mode=True)
+        if open_it:
+            open_browser(url, app_mode=True)
     else:
         say("Офис запущен, но веб-адрес не определён. Проверь ~/.local/state/agent-office.log")
     return True
@@ -416,10 +444,11 @@ def comfy_dir():
     return next((x for x in candidates if (x / "main.py").is_file()), None)
 
 
-def start_comfy():
+def start_comfy(open_it=True):
     if port_busy(8188):
-        say("Порт ComfyUI 8188 уже занят; открываю работающий интерфейс")
-        open_browser("http://127.0.0.1:8188", app_mode=True)
+        say("ComfyUI уже отвечает на порту 8188; не запускаю второй процесс")
+        if open_it:
+            open_browser("http://127.0.0.1:8188", app_mode=True)
         return True
     directory = comfy_dir()
     if directory is None:
@@ -440,7 +469,8 @@ def start_comfy():
     if not wait_for_service(proc, "http://127.0.0.1:8188", 90):
         error(f"ComfyUI не отвечает; смотри {log}")
         return False
-    open_browser("http://127.0.0.1:8188", app_mode=True)
+    if open_it:
+        open_browser("http://127.0.0.1:8188", app_mode=True)
     return True
 
 
@@ -497,15 +527,42 @@ def stop_legacy_llama(cfg):
             pass
 
 
+def stop_webui():
+    """Only stop the known user systemd service; never kill an arbitrary owner of port 3000."""
+    if not shutil.which("systemctl"):
+        say("Open WebUI: systemctl не найден, внешние процессы не трогаю.")
+        return False
+    result = subprocess.run(["systemctl", "--user", "stop", "open-webui.service"],
+                            capture_output=True, text=True)
+    if result.returncode:
+        error("Не удалось остановить open-webui.service: " + (result.stderr.strip() or "неизвестная ошибка"))
+        return False
+    if port_busy(3000):
+        say("⚠ Порт 3000 остаётся занят: возможно, WebUI запущен вручную. Чужой процесс не трогаю.")
+    else:
+        say("Open WebUI: user-service остановлен")
+    return True
+
+
+def show_llama_log():
+    meta = read_json(SERVER_STATE)
+    if not isinstance(meta, dict) or not process_owned(meta, "llama"):
+        say("Нет работающего llama-server, запущенного AI Model Lab.")
+        return
+    logfile = Path(meta.get("log", ""))
+    if logfile.is_file():
+        for line in logfile.read_text(errors="replace").splitlines()[-50:]:
+            say(line)
+    else:
+        say("Лог управляемого сервера не найден")
+
+
 def stop_all(cfg, include_legacy=False):
     say("=== Остановка управляемых сервисов ===")
     stop_owned(SERVER_STATE, "llama")
     stop_owned(COMFY_STATE, "comfy")
     stop_office()
-    if shutil.which("systemctl"):
-        subprocess.run(["systemctl", "--user", "stop", "open-webui.service"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        say("Open WebUI: отправлена команда остановки systemd user-service")
+    stop_webui()
     if include_legacy:
         stop_legacy_llama(cfg)
     if port_busy(8080):
@@ -524,7 +581,11 @@ def gpu_info():
 def status():
     meta = read_json(SERVER_STATE)
     if process_owned(meta, "llama"):
+        cfg = load_config()
+        prof = profile_for(cfg, meta.get("alias"))
         say(f"llama.cpp: PID={meta['pid']} · alias={meta.get('alias')} · ctx={meta.get('ctx')}")
+        if prof:
+            say(f"  Назначение: {purpose(prof)}")
     else:
         say("llama.cpp: нет подтверждённого процесса AI Lab v2")
     props = http_json(API + "/props") if port_busy(8080) else None
@@ -550,21 +611,31 @@ def status():
     say("WebUI 3000: " + ("работает" if port_busy(3000) else "не отвечает"))
     say("ComfyUI 8188: " + ("работает" if port_busy(8188) else "не отвечает"))
     url = find_office_url()
-    say("Agent Office: " + (url or "адрес не определён"))
+    office_pid = HOME / ".local/state/agent-office.pid"
+    try:
+        pid = int(office_pid.read_text().strip())
+        running = ("run.py" in process_cmdline(pid)
+                   and Path(f"/proc/{pid}/cwd").resolve() == (HOME / "AI/agent-office").resolve())
+    except (OSError, ValueError, RuntimeError):
+        running = False
+    say("Agent Office: " + (("работает · " + (url or "веб-адрес не определён"))
+                            if running else ("адрес обнаружен · " + url if url else "не подтверждён")))
     gpu = gpu_info()
     if gpu:
         say("GPU (util%, MiB used, MiB total, W, °C): " + gpu)
 
 
-def quick_speed_test():
+def quick_speed_test(max_tokens=256):
     props = http_json(API + "/props")
     if not props:
         error("Сервер на 8080 не отвечает. Сначала запусти модель.")
         return False
-    say("Быстрый локальный speed-test: не является официальным benchmark качества.")
+    if max_tokens not in (256, 512):
+        raise ValueError("Допустимые размеры speed-test: 256 или 512")
+    say(f"Локальный speed-test до {max_tokens} токенов; это не benchmark качества.")
     payload = {"model":props.get("model_alias", "local"),"messages":[{"role":"user",
          "content":"Кратко перечисли 15 практических рекомендаций по архитектуре Android на Kotlin, по одному предложению на пункт."}],
-         "stream":False,"temperature":0,"max_tokens":256}
+         "stream":False,"temperature":0,"max_tokens":max_tokens}
     t0 = time.monotonic()
     reply = http_json(API + "/v1/chat/completions", payload, timeout=240)
     elapsed = time.monotonic() - t0
@@ -584,9 +655,10 @@ def quick_speed_test():
     result = {"timestamp":datetime.datetime.now().astimezone().isoformat(),
               "alias":props.get("model_alias"),"context":(props.get("default_generation_settings") or {}).get("n_ctx"),
               "elapsed_s":round(elapsed,3),"input_tokens":input_tokens,"output_tokens":output,
+              "requested_max_tokens": max_tokens,
               "timings":timings,"gpu_info":gpu_info()}
     ensure_state()
-    dest = STATE / "benchmarks" / f"speed_{result['alias']}_{datetime.datetime.now():%Y%m%d_%H%M%S}.json"
+    dest = STATE / "benchmarks" / f"speed_{result['alias']}_{datetime.datetime.now():%Y%m%d_%H%M%S_%f}.json"
     atomic_json(dest, result)
     say(f"Сохранено: {dest}")
     return True
@@ -606,6 +678,7 @@ def list_gguf(cfg):
 def doctor(cfg):
     say(f"Сервер: {binary_path(cfg)} {'OK' if binary_path(cfg).is_file() else 'НЕ НАЙДЕН'}")
     for prof in cfg["models"]:
+        say(f"  {prof['name']} — {purpose(prof)}")
         try:
             path = choose_file(cfg, prof)
             extra = prof.get("mmproj")
@@ -621,68 +694,262 @@ def doctor(cfg):
     status()
 
 
+def confirm(question, required="да"):
+    try:
+        answer = input(f"{question} Для подтверждения введи '{required}': ").strip()
+        return answer == required
+    except (KeyboardInterrupt, EOFError):
+        return False
+
+
+def choose_model(cfg, label="Выбери модель"):
+    say("\n" + label)
+    for i, p in enumerate(cfg["models"], 1):
+        say(f" {i}) {p['name']} — {purpose(p)} [{p['id']}]")
+    say(" 0) Назад")
+    try:
+        choice = input("Номер: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if choice.isdigit() and 1 <= int(choice) <= len(cfg["models"]):
+        return cfg["models"][int(choice)-1]["id"]
+    return None
+
+
+def service_switch(cfg):
+    """Switch only a verified owned llama process; no implicit killing of legacy services."""
+    alias = choose_model(cfg, "Переключение модели llama.cpp")
+    if not alias:
+        return
+    meta = read_json(SERVER_STATE)
+    if process_owned(meta, "llama"):
+        if meta.get("alias") == alias:
+            say("Эта модель уже запущена.")
+            return
+        if not confirm(f"Остановить {meta.get('alias')} и запустить {alias}?"):
+            return
+        if not stop_owned(SERVER_STATE, "llama"):
+            say("Текущий сервер не остановился; переключение отменено.")
+            return
+    elif port_busy(8080):
+        say("На 8080 работает сторонний/старый сервер. Не останавливаю его автоматически.")
+        status()
+        return
+    start_llama(cfg, alias)
+
+
+def management_menu(cfg):
+    """Manage individual services without requiring a running LLM."""
+    while True:
+        say("\n========== ⚙ УПРАВЛЕНИЕ AI-СЕРВИСАМИ ==========")
+        say("1) Запустить llama.cpp (выбрать модель)")
+        say("2) Переключить текущую модель llama.cpp")
+        say("3) Завершить только текущий управляемый llama.cpp")
+        say("4) Запустить Open WebUI (без браузера)")
+        say("5) Остановить Open WebUI")
+        say("6) Запустить Agent Office (без браузера)")
+        say("7) Остановить Agent Office")
+        say("8) Запустить ComfyUI (без браузера)")
+        say("9) Остановить ComfyUI")
+        say("s) Статус всех сервисов и GPU")
+        say("l) Последние строки журнала llama.cpp")
+        say("a) Завершить ВСЕ управляемые AI-сервисы")
+        say("L) Завершить старые llama-server (отдельное подтверждение)")
+        say("0) Назад")
+        try:
+            choice = input("Управление: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            return
+        if choice == "0": return
+        if choice == "1":
+            alias = choose_model(cfg)
+            if alias: start_llama(cfg, alias)
+        elif choice == "2": service_switch(cfg)
+        elif choice == "3":
+            if confirm("Завершить текущую модель (активный benchmark может прерваться)?"):
+                stop_owned(SERVER_STATE, "llama")
+        elif choice == "4": start_webui(open_it=False)
+        elif choice == "5": stop_webui()
+        elif choice == "6": start_office(open_it=False)
+        elif choice == "7": stop_office()
+        elif choice == "8": start_comfy(open_it=False)
+        elif choice == "9": stop_owned(COMFY_STATE, "comfy")
+        elif choice == "s": status()
+        elif choice == "l": show_llama_log()
+        elif choice == "a":
+            if confirm("Остановить llama.cpp, WebUI, Agent Office и ComfyUI?"):
+                stop_all(cfg)
+        elif choice == "L": stop_legacy_llama(cfg)
+        else: say("Неизвестный пункт")
+
+
+def latest_benchmark_reports(limit=12):
+    root = LAB_DIR / "benchmarks"
+    if not root.is_dir():
+        say(f"Нет каталога результатов: {root}")
+        return []
+    paths = sorted(root.glob("*/summary.json"), key=lambda f: f.stat().st_mtime, reverse=True)[:limit]
+    if not paths:
+        say("Сохранённых отчётов пока нет")
+        return []
+    say("\nПоследние результаты ai-benchmark.py:")
+    for i, p in enumerate(paths, 1):
+        report = read_json(p) or {}
+        result = report.get("result") or {}
+        say(f"{i:2}. {p.parent.name}: {report.get('model', '?')}  "
+            f"{result.get('status', '?')}  {report.get('wall_seconds', '?')} с  "
+            f"tools={sum((result.get('tool_calls') or {}).values())}")
+    return paths
+
+
+def compare_benchmark_reports():
+    reports = latest_benchmark_reports(limit=20)
+    if len(reports) < 2:
+        say("Для сравнения нужно минимум два отчёта")
+        return
+    try:
+        raw = input("Номера двух или нескольких отчётов через пробел (0 = отмена): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if raw in ("", "0"): return
+    try:
+        indexes = [int(x) for x in raw.split()]
+    except ValueError:
+        error("Введи номера через пробел")
+        return
+    if len(indexes) < 2 or len(set(indexes)) != len(indexes) or not all(1 <= x <= len(reports) for x in indexes):
+        error("Нужно два или больше различных существующих номера")
+        return
+    chosen = [reports[i-1] for i in indexes]
+    hashes = {(read_json(p) or {}).get("prompt_sha256") for p in chosen}
+    if len(hashes) != 1 or None in hashes:
+        say("⚠ Промпты различаются или хеш не записан; прямое сравнение качества недопустимо.")
+        return
+    benchmark = LAB_DIR / "ai-benchmark.py"
+    if not benchmark.is_file():
+        error("Не найден ai-benchmark.py")
+        return
+    subprocess.run([sys.executable, str(benchmark), "compare", *(str(p) for p in chosen)], check=False)
+
+
+def run_android_benchmark(phase):
+    alias = current_model_alias()
+    if not alias:
+        error("Не найден работающий llama-server с /props на 8080")
+        return False
+    if alias not in BENCH_ALIASES:
+        error(f"Для {alias} исторический LP-01A/{phase} не поддерживается. "
+              "Допустимо: blend-q4, qwen38-27b, coder-30b.")
+        return False
+    if not BENCH_SCRIPT.is_file() or not shutil.which("fish"):
+        error(f"Не найден Fish или бенчмарк {BENCH_SCRIPT}")
+        return False
+    props = http_json(API + "/props") or {}
+    ctx = (props.get("default_generation_settings") or {}).get("n_ctx", props.get("n_ctx"))
+    pi = read_json(HOME / ".pi/agent/models.json") or {}
+    providers = pi.get("providers") or {}
+    pi_models = (providers.get("local-lab") or {}).get("models") or []
+    pi_profile = next((m for m in pi_models if m.get("id") == alias), None)
+    if pi_profile is None or pi_profile.get("contextWindow") != ctx:
+        error(f"Pi contextWindow={None if pi_profile is None else pi_profile.get('contextWindow')} "
+              f"не совпадает с контекстом сервера {ctx}; исправь до запуска")
+        return False
+    say(f"LP-01A/{phase} · модель {alias} · контекст {ctx} · до 900 с · read/grep/find/ls")
+    say("ВНИМАНИЕ: инструменты чтения не изолированы ОС-песочницей; не запускай на секретных файлах.")
+    if not confirm("Начать длительный Android-бенчмарк?"):
+        return False
+    try:
+        result = subprocess.run([shutil.which("fish"), str(BENCH_SCRIPT), phase, alias], check=False)
+    except KeyboardInterrupt:
+        say("Бенчмарк прерван пользователем")
+        return False
+    if result.returncode:
+        error(f"Бенчмарк завершился с exit code={result.returncode}; смотри журнал")
+        return False
+    say("Обрати внимание на status в summary.json: exit code 0 не означает успешное решение задачи.")
+    return True
+
+
+def tests_menu(cfg):
+    while True:
+        say("\n========== 🧪 ТЕСТЫ И БЕНЧМАРКИ ==========")
+        say("1) Быстрый speed-test API (до 256 токенов)")
+        say("2) Расширенный speed-test API (до 512 токенов)")
+        say("3) Android LP-01A/P1 — STB UI routing (900 с)")
+        say("4) Android LP-01A/P2 — выбор плеера (900 с)")
+        say("5) Последние отчёты ai-benchmark.py")
+        say("6) Сравнить отчёты с одинаковым SHA-256 промпта")
+        say("7) Диагностика моделей, Pi, RAM, GPU и сервисов")
+        say("0) Назад")
+        try:
+            choice = input("Тесты: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            return
+        if choice == "0": return
+        if choice == "1": quick_speed_test(256)
+        elif choice == "2": quick_speed_test(512)
+        elif choice == "3": run_android_benchmark("P1")
+        elif choice == "4": run_android_benchmark("P2")
+        elif choice == "5": latest_benchmark_reports()
+        elif choice == "6": compare_benchmark_reports()
+        elif choice == "7": doctor(cfg)
+        else: say("Неизвестный пункт")
+
+
+def run_opencode(alias):
+    exe = shutil.which("opencode")
+    if not exe:
+        error("Не найден opencode")
+        return
+    # A running model may differ from the initial post-start alias.
+    actual_alias = current_model_alias() or alias
+    if not actual_alias:
+        error("Сначала запусти модель")
+        return
+    say(f"Запускаю OpenCode с local/{actual_alias}; проверь провайдера в OpenCode.")
+    subprocess.run([exe, "--model", "local/"+actual_alias], check=False)
+
+
 def menu_after_model(cfg, alias):
     while True:
-        say("\n========== AI MODEL LAB ==========")
-        say(f"Модель: {alias} | API: {API}/v1")
+        active = current_model_alias() or alias
+        profile = profile_for(cfg, active)
+        say("\n========== AI MODEL LAB — МОДЕЛЬ ==========")
+        say(f"Модель: {profile['name'] if profile else active}")
+        say(f"Назначение: {purpose(profile) if profile else 'не указано'} | API: {API}/v1")
         say("1) Открыть Open WebUI")
         say("2) Открыть Agent Office")
-        say("3) Открыть WebUI + Agent Office")
-        say("4) Запустить OpenCode (текущая модель)")
-        say("5) Завершить текущую модель")
-        say("6) Завершить все управляемые AI-сервисы")
-        say("a) Завершить также старые llama-server (с отдельным подтверждением)")
-        say("7) Статус GPU, памяти, серверов")
-        say("8) Быстрый замер скорости API")
-        say("9) Показать журнал сервера")
-        say("0) Закрыть окно, оставить сервер в фоне")
+        say("3) Открыть WebUI и Agent Office")
+        say("4) Запустить OpenCode")
+        say("5) 🧪 Тесты")
+        say("6) ⚙ Управление сервисами")
+        say("7) Статус GPU, RAM и сервисов")
+        say("0) Закрыть окно — сервер остаётся в фоне")
         try:
             choice = input("Выбор: ").strip()
         except (KeyboardInterrupt, EOFError):
-            say("\nОкно закрывается, сервер остаётся работать.")
+            say("\nОкно закрывается; серверы не трогаю.")
             return
-        if choice == "0":
-            say("Сервер остаётся в фоне.")
-            return
+        if choice == "0": return
         if choice == "1": start_webui()
         elif choice == "2": start_office()
         elif choice == "3": start_webui(); start_office()
-        elif choice == "4":
-            exe = shutil.which("opencode")
-            if not exe:
-                error("Не найден opencode")
-            else:
-                say(f"Запускаю OpenCode с local/{alias}; проверь модель в конфигурации OpenCode.")
-                subprocess.run([exe, "--model", "local/"+alias])
-        elif choice == "5":
-            stop_owned(SERVER_STATE, "llama")
-            return
-        elif choice == "6":
-            if input("Подтвердить остановку всех управляемых сервисов? [да/нет]: ").strip().lower() == "да":
-                stop_all(cfg); return
-        elif choice == "a":
-            stop_legacy_llama(cfg)
+        elif choice == "4": run_opencode(active)
+        elif choice == "5": tests_menu(cfg)
+        elif choice == "6": management_menu(cfg)
         elif choice == "7": status()
-        elif choice == "8": quick_speed_test()
-        elif choice == "9":
-            meta = read_json(SERVER_STATE)
-            if meta and meta.get("log") and Path(meta["log"]).is_file():
-                for line in Path(meta["log"]).read_text(errors="replace").splitlines()[-35:]:
-                    say(line)
-            else: say("Журнал не найден")
-        else:
-            say("Неизвестный пункт")
+        else: say("Неизвестный пункт")
 
 
 def main_menu(cfg):
     while True:
-        say("\n========= AI MODEL LAB v2 =========")
+        say("\n========== AI MODEL LAB v2.1 ==========")
         for i, p in enumerate(cfg["models"], 1):
-            say(f"{i}) {p['name']} [{p['id']}]")
-        say("s) Статус  d) Диагностика  v) Speed-test  w) WebUI  o) Agent Office")
-        say("c) ComfyUI  f) Поиск GGUF  x) Стоп текущей модели  X) Стоп всех сервисов")
-        say("L) Остановить старые llama-server (двойное подтверждение)")
-        say("0) Выход (серверы останутся в фоне)")
+            say(f"{i}) {p['name']} — {purpose(p)} [{p['id']}]")
+        say("t) 🧪 Тесты       m) ⚙ Управление сервисами")
+        say("w) WebUI          o) Agent Office      b) WebUI + Agent Office")
+        say("s) Статус         d) Диагностика       f) Поиск GGUF")
+        say("0) Выход — серверы останутся в фоне")
         try:
             choice = input("Выбор: ").strip()
         except (KeyboardInterrupt, EOFError):
@@ -692,26 +959,23 @@ def main_menu(cfg):
             alias = cfg["models"][int(choice)-1]["id"]
             if start_llama(cfg, alias):
                 menu_after_model(cfg, alias)
-        elif choice == "s": status()
-        elif choice == "d": doctor(cfg)
-        elif choice == "v": quick_speed_test()
+                return  # Exit desktop manager when user closes model's window.
+        elif choice == "t": tests_menu(cfg)
+        elif choice == "m": management_menu(cfg)
         elif choice == "w": start_webui()
         elif choice == "o": start_office()
-        elif choice == "c": start_comfy()
+        elif choice == "b": start_webui(); start_office()
+        elif choice == "s": status()
+        elif choice == "d": doctor(cfg)
         elif choice == "f": list_gguf(cfg)
-        elif choice == "x": stop_owned(SERVER_STATE, "llama")
-        elif choice == "L": stop_legacy_llama(cfg)
-        elif choice == "X":
-            if input("Ввести 'да' для остановки всех управляемых сервисов: ").strip().lower() == "да":
-                stop_all(cfg)
         else:
             say("Неверный пункт меню")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Model Lab v2 — CachyOS, локальные модели")
+    parser = argparse.ArgumentParser(description="AI Model Lab v2.1 — CachyOS, локальные модели")
     parser.add_argument("action", nargs="?", default="menu", choices=[
-        "menu", "start", "stop", "stop-all", "status", "doctor", "webui", "office", "comfy", "speed", "discover"])
+        "menu", "start", "stop", "stop-all", "status", "doctor", "webui", "office", "comfy", "speed", "discover", "tests", "manage"])
     parser.add_argument("model", nargs="?")
     parser.add_argument("--menu", action="store_true", help="показать меню после запуска модели")
     parser.add_argument("--dry-run", action="store_true")
@@ -740,6 +1004,8 @@ def main():
         elif args.action == "comfy": start_comfy()
         elif args.action == "speed": quick_speed_test()
         elif args.action == "discover": list_gguf(cfg)
+        elif args.action == "tests": tests_menu(cfg)
+        elif args.action == "manage": management_menu(cfg)
     except (RuntimeError, OSError, ValueError) as e:
         error(e)
         return 1
