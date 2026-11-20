@@ -1,0 +1,23 @@
+# Do not publish local application state, logs, chats, benchmark source data.
+data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.env.*
+*.log
+*.gguf
+*.safetensors
+*.tar.gz
+*.zip
+
+# Real local model paths, usernames, private project directories and API settings.
+models.json
+settings.json
+
+# These two prompts were tailored to a non-public Android project. Replace with
+# generic public benchmarks and review copyright before committing them.
+benchmarks/prompts/LP-P1-STB-ui.md
+benchmarks/prompts/LP-P2-STB-player.md
