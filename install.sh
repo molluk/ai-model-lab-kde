@@ -58,6 +58,6 @@ fi
 printf '\nГотово!\nПриложение: %s\nОтчёты: %s\nЯрлык: %s\n' "$DEST" "$DEST/data/reports" "$DESKTOP"
 printf 'Запуск: %s\n' "$BIN"
 if ! /usr/bin/env python3 -c 'import PySide6' 2>/dev/null && ! /usr/bin/env python3 -c 'import PyQt6' 2>/dev/null; then
-  printf '\nНе найден Qt6 для Python. Для CachyOS/Arch: sudo pacman -S python-pyside6\n'
+  printf '\nНе найден Qt6 для Python. Для CachyOS/Arch: sudo pacman -S pyside6\n'
 fi
 printf 'Предыдущие AI Lab, настройки Pi, GGUF, Android-проекты НЕ изменялись.\n'
