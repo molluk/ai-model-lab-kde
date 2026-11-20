@@ -26,3 +26,8 @@ Original ZIP hashes are provided for provenance, not as hashes of this repositor
 
 v3.7 adds UI fixes and public generic sample benchmark prompts.
 No code or configuration has been pushed to a remote repository.
+
+Additional reconstructed releases:
+- v3.8: UI localization code and catalogs reconstructed from the v3.8 ZIP.
+- v3.9: user-service and license transition changes recorded as new commits.
+This is a reconstructed provenance trail, not original developer timestamps.
