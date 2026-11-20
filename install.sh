@@ -1,61 +1,65 @@
 #!/usr/bin/env bash
-# Install only independent AI Lab shortcuts. Existing model-lab scripts are untouched.
 set -Eeuo pipefail
-SOURCE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-DEST="$HOME/ai-model-lab/shortcuts"
-APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-
-install -d -m 0755 "$DEST" "$APP_DIR"
-install -m 0755 "$SOURCE_DIR/ai-lab.sh" "$DEST/ai-lab.sh"
-
-DESKTOP_DIR=''
+SRC="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+DEST="${XDG_DATA_HOME:-$HOME/.local/share}/ai-model-lab-v2"
+BIN="$HOME/.local/bin/ai-model-lab-v2"
+APPS="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+install -d -m 0755 "$DEST" "$(dirname "$BIN")" "$APPS"
+# Keep any old personal config on reinstall. Never overwrite it silently.
+install -m 0755 "$SRC/ai_lab.py" "$DEST/ai_lab.py"
+if [[ ! -e "$DEST/models.json" ]]; then
+    install -m 0644 "$SRC/models.json" "$DEST/models.json"
+fi
+cat > "$BIN" <<EOF
+#!/usr/bin/env bash
+exec /usr/bin/env python3 "$DEST/ai_lab.py" "\$@"
+EOF
+chmod 0755 "$BIN"
+DSTART=""
 if command -v xdg-user-dir >/dev/null 2>&1; then
-  DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+    DSTART="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
 fi
-if [[ -z "$DESKTOP_DIR" || "$DESKTOP_DIR" == "$HOME" ]]; then
-  for d in "$HOME/Рабочий стол" "$HOME/Desktop"; do
-    if [[ -d "$d" ]]; then DESKTOP_DIR="$d"; break; fi
-  done
+if [[ -z "$DSTART" || "$DSTART" == "$HOME" ]]; then
+    for d in "$HOME/Рабочий стол" "$HOME/Desktop"; do
+        if [[ -d "$d" ]]; then DSTART="$d"; break; fi
+    done
 fi
-if [[ -z "$DESKTOP_DIR" || "$DESKTOP_DIR" == "$HOME" ]]; then
-  DESKTOP_DIR="$HOME/Desktop"
-  printf 'Не найден XDG Desktop, использую %s\n' "$DESKTOP_DIR"
-fi
-install -d -m 0755 "$DESKTOP_DIR"
-
-add_shortcut() {
-  local slug="$1" name="$2" comment="$3" action="$4" terminal="$5" icon="$6"
-  local target="$APP_DIR/ai-lab-$slug.desktop"
-  cat > "$target" <<EOF
+# No surprise creation of an unused Desktop dir.
+write_desktop() {
+    local id="$1" name="$2" comment="$3" args="$4" icon="$5"
+    local file="$APPS/ai-v2-$id.desktop"
+    cat > "$file" <<EOF
 [Desktop Entry]
 Type=Application
 Version=1.0
 Name=$name
 Comment=$comment
-Exec="$DEST/ai-lab.sh" $action
+Exec=$BIN $args
 Icon=$icon
-Terminal=$terminal
+Terminal=true
 Categories=Development;Science;
 StartupNotify=false
 EOF
-  chmod 755 "$target"
-  install -m 0755 "$target" "$DESKTOP_DIR/ai-lab-$slug.desktop"
+    chmod 0644 "$file"
+    if [[ -n "$DSTART" && -d "$DSTART" ]]; then
+        cp "$file" "$DSTART/ai-v2-$id.desktop"
+        chmod +x "$DSTART/ai-v2-$id.desktop"
+    fi
 }
-
-add_shortcut blend-q4      'AI Lab — Blend Q4 (128K)'       'Запустить llama-server Blend Q4; 128K, thinking off'             'model blend-q4'    true  utilities-terminal
-add_shortcut blend-q5      'AI Lab — Blend Q5 (32K)'       'Экспериментальный профиль Blend Q5; 32K'                        'model blend-q5'    true  utilities-terminal
-add_shortcut qwen38-27b    'AI Lab — Qwen3.8 27B (128K)'   'Запустить llama-server Qwen3.8 27B; 128K, thinking off'         'model qwen38-27b'  true  utilities-terminal
-add_shortcut coder-30b     'AI Lab — Qwen3-Coder (128K)'   'Запустить llama-server Qwen3-Coder 30B; 128K'                   'model coder-30b'   true  utilities-terminal
-add_shortcut devstral-24b  'AI Lab — Devstral 24B (32K)'   'Экспериментальный профиль Devstral; 32K'                       'model devstral-24b' true utilities-terminal
-add_shortcut llama-stop    'AI Lab — Стоп llama.cpp'      'Остановить только сервер, запущенный этим комплектом ярлыков'  'stop'              true  media-playback-stop
-add_shortcut status        'AI Lab — Статус серверов'    'Проверка llama.cpp и Open WebUI'                                'doctor'            true  dialog-information
-add_shortcut webui-start   'AI Lab — Запуск Open WebUI'  'Запустить локальный веб-интерфейс на порту 3000'                'webui'            true  applications-internet
-add_shortcut webui-open    'AI Lab — Открыть Open WebUI' 'Открыть http://127.0.0.1:3000'                                 'open-webui'       false applications-internet
-
+write_desktop manager 'AI Lab — Менеджер моделей' 'Выбор модели и управление AI-сервисами' 'menu' 'applications-development'
+write_desktop blend-q4 'AI Lab — Blend Q4 (128K)' 'Запуск + меню управления' 'start blend-q4 --menu' 'utilities-terminal'
+write_desktop blend-q5 'AI Lab — Blend Q5 (32K)' 'Запуск + меню управления' 'start blend-q5 --menu' 'utilities-terminal'
+write_desktop qwen38-27b 'AI Lab — Qwen3.8 (128K)' 'Запуск + меню управления' 'start qwen38-27b --menu' 'utilities-terminal'
+write_desktop coder-30b 'AI Lab — Coder 30B (128K)' 'Запуск + меню управления' 'start coder-30b --menu' 'utilities-terminal'
+write_desktop coder-30b-ud 'AI Lab — Coder 30B UD (96K)' 'Запуск + меню управления' 'start coder-30b-ud --menu' 'utilities-terminal'
+write_desktop qwen3-vl-30b 'AI Lab — Qwen3-VL (32K)' 'Запуск + меню управления' 'start qwen3-vl-30b --menu' 'applications-graphics'
+write_desktop devstral-24b 'AI Lab — Devstral 24B (32K)' 'Запуск + меню управления' 'start devstral-24b --menu' 'utilities-terminal'
+write_desktop status 'AI Lab — Статус серверов' 'Модель, GPU, VRAM, контекст и сервисы' 'status' 'dialog-information'
+write_desktop stop-all 'AI Lab — Остановить все сервисы' 'Запрашивает подтверждение остановки' 'stop-all --ask' 'media-playback-stop'
 if command -v update-desktop-database >/dev/null 2>&1; then
-  update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true
+    update-desktop-database "$APPS" >/dev/null 2>&1 || true
 fi
-printf '\nУстановлено!\nСкрипт: %s/ai-lab.sh\nМеню KDE/XDG: %s/ai-lab-*.desktop\nРабочий стол: %s/ai-lab-*.desktop\n' \
-  "$DEST" "$APP_DIR" "$DESKTOP_DIR"
-printf '\nПроверка без запуска модели:\n  bash "%s/ai-lab.sh" doctor\n\n' "$DEST"
-printf 'Окно терминала с работающей моделью должно оставаться открытым.\n'
+printf '\nУстановлено: %s\nМеню: %s/ai-v2-*.desktop\n' "$BIN" "$APPS"
+if [[ -n "$DSTART" ]]; then printf 'Рабочий стол: %s/ai-v2-*.desktop\n' "$DSTART"; fi
+printf '\nПроверка: %q doctor\n' "$BIN"
+printf 'Старые ярлыки, ai-menu.sh, ai-stop.sh, скрипты моделей и программы Hugging Face НЕ изменены.\n'
