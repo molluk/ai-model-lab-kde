@@ -1023,7 +1023,16 @@ class Window(QMainWindow):
                 pass
             return 'external' if snapshot.get('webui') else 'stopped'
         if sid == 'office':
-            return 'running' if core.verified('office') else 'stopped'
+            if core.verified('office'):
+                return 'running'
+            legacy = core.HOME / '.local/state/agent-office.pid'
+            try:
+                pid = int(legacy.read_text().strip())
+                if pid > 1 and 'run.py' in core.cmdline(pid) and Path(f'/proc/{pid}/cwd').resolve() == core.office_path().resolve():
+                    return 'external'
+            except (OSError, ValueError):
+                pass
+            return 'stopped'
         if sid == 'comfy':
             if core.verified('comfy'):
                 return 'running'
