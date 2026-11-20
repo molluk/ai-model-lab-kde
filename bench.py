@@ -66,14 +66,14 @@ def cpu_stat():
     except (OSError,ValueError,IndexError): return None
 
 
-def collect(samples,path,interval):
+def collect(samples,path,interval,gpu_index=None):
     old=cpu_stat()
     with path.open('w',encoding='utf-8',newline='') as out:
         cols=['seconds','gpu_percent','vram_mib','vram_total_mib','power_w','temp_c','ram_gib','swap_gib','cpu_percent']
         writer=csv.DictWriter(out,fieldnames=cols);writer.writeheader()
         started=time.monotonic()
         while True:
-            gpu=core.gpu_metrics();mem=core.ram_metrics();now=cpu_stat()
+            gpu=core.gpu_metrics(gpu_index);mem=core.ram_metrics();now=cpu_stat()
             cpu=round(100*((now[0]-old[0])-(now[1]-old[1]))/(now[0]-old[0]),2) if now and old and now[0]>old[0] else None
             old=now
             item=dict(seconds=round(time.monotonic()-started,3),gpu_percent=gpu.get('gpu'),
@@ -159,9 +159,9 @@ def generate_context(target):
 
 
 def run_api(kind,model,args,d):
-    pre=core.json_api('http://127.0.0.1:8080/props') or {}
+    pre=core.json_api(f'http://127.0.0.1:{args.port}/props') or {}
     if pre.get('model_alias') and pre['model_alias']!=model:
-        raise RuntimeError('На 8080 загружен другой alias')
+        raise RuntimeError(f'На порту {args.port} загружен другой alias')
     cases=[]
     if kind=='speed':
         prompt='Напиши ровно двадцать практических рекомендаций по архитектуре Android приложений на Kotlin, каждую отдельным пунктом.'
@@ -181,7 +181,7 @@ def run_api(kind,model,args,d):
         payload={'model':model,'messages':[{'role':'user','content':prompt}],
                  'temperature':0,'max_tokens':int(args.output_tokens) if kind=='speed' else 160,'stream':False}
         start=time.monotonic()
-        result=request('http://127.0.0.1:8080/v1/chat/completions',payload,args.timeout)
+        result=request(f'http://127.0.0.1:{args.port}/v1/chat/completions',payload,args.timeout)
         elapsed=round(time.monotonic()-start,3)
         reply=((result.get('choices') or [{}])[0].get('message') or {}).get('content') or ''
         usage=result.get('usage') or {}
@@ -202,6 +202,8 @@ def run_api(kind,model,args,d):
 
 
 def run_android(kind,model,args,d):
+    if args.port != 8080:
+        raise RuntimeError('Android Pi local-lab использует порт 8080. Для другого порта нужен отдельный Pi provider.')
     state=core.preflight_android()
     if state['alias']!=model: raise RuntimeError('Серверная модель отличается от выбранной')
     project=Path(args.project).expanduser().resolve()
@@ -255,17 +257,19 @@ def main():
     p=argparse.ArgumentParser(description='AI Model Lab, integrated benchmark engine')
     p.add_argument('--kind',required=True,choices=('speed','qa','context','p1','p2'))
     p.add_argument('--model',required=True)
+    p.add_argument('--port',type=int,default=8080)
+    p.add_argument('--gpu',default='',help='Индекс NVIDIA GPU или UUID для записи телеметрии')
     p.add_argument('--project',default=core.settings().get('android_project',''))
     p.add_argument('--timeout',type=int,default=1800)
     p.add_argument('--budget',type=int,default=24)
     p.add_argument('--output-tokens',type=int,default=256)
     p.add_argument('--target-tokens',type=int,default=8192)
     args=p.parse_args()
-    if not (10<=args.timeout<=7200 and 1<=args.budget<=200 and 32<=args.output_tokens<=2048):
+    if not (1024<=args.port<=65535 and 10<=args.timeout<=7200 and 1<=args.budget<=200 and 32<=args.output_tokens<=2048):
         p.error('Недопустимые бюджет, тайм-аут или длина ответа')
     core.prepare()
     d=create_report_dir(args.kind,args.model)
-    samples=[];thread=threading.Thread(target=collect,args=(samples,d/'telemetry.csv',2),daemon=True)
+    samples=[];thread=threading.Thread(target=collect,args=(samples,d/'telemetry.csv',2,args.gpu),daemon=True)
     thread.start();started=time.monotonic()
     metadata={'schema_version':3,'started_at':dt.datetime.now().astimezone().isoformat(),
               'model':args.model,'kind':args.kind,'arguments':vars(args)}

@@ -6,7 +6,7 @@ DEST="${AI_MODEL_LAB_HOME:-$HOME/AI/AI-Model-Lab}"
 mkdir -p "$DEST" "$HOME/.local/bin" "$HOME/.local/share/applications"
 
 # Preserve existing profiles and reports when upgrading.
-for name in core.py gui.py bench.py run.sh README_RU.md; do
+for name in core.py multi.py gui.py bench.py run.sh README_RU.md; do
   install -m 0644 "$SOURCE/$name" "$DEST/$name"
 done
 install -m 0755 "$SOURCE/install.sh" "$DEST/install.sh"

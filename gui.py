@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.1 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE v3.2 — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
@@ -8,31 +8,32 @@ from collections import deque
 
 try:
     from PySide6.QtCore import Qt, QThread, Signal, QTimer, QProcess
-    from PySide6.QtGui import QPainter, QColor, QPen, QFont, QDesktopServices, QTextCursor
+    from PySide6.QtGui import QPainter, QColor, QPen, QFont, QDesktopServices, QTextCursor, QIcon, QAction, QBrush
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout,
         QHBoxLayout, QGridLayout, QTabWidget, QTreeWidget, QTreeWidgetItem, QGroupBox,
         QComboBox, QLineEdit, QSpinBox, QFileDialog, QMessageBox, QTextEdit, QSplitter,
         QTableWidget, QTableWidgetItem, QHeaderView, QFormLayout, QAbstractItemView,
-        QScrollArea, QCheckBox, QDoubleSpinBox
+        QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle
     )
     from PySide6.QtCore import QUrl
 except ImportError:
     try:
         from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal, QTimer, QProcess, QUrl
-        from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QDesktopServices, QTextCursor
+        from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QDesktopServices, QTextCursor, QIcon, QAction, QBrush
         from PyQt6.QtWidgets import (
             QApplication, QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout,
             QHBoxLayout, QGridLayout, QTabWidget, QTreeWidget, QTreeWidgetItem, QGroupBox,
             QComboBox, QLineEdit, QSpinBox, QFileDialog, QMessageBox, QTextEdit, QSplitter,
             QTableWidget, QTableWidgetItem, QHeaderView, QFormLayout, QAbstractItemView,
-            QScrollArea, QCheckBox, QDoubleSpinBox
+            QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle
         )
     except ImportError:
         print('Нужен Qt6 Python. В CachyOS: sudo pacman -S pyside6', file=sys.stderr)
         raise SystemExit(2)
 
 import core
+import multi
 
 COLORS = {
     'bg': '#111723', 'surface': '#1a2333', 'panel': '#222d40', 'line': '#33445d', 'text': '#e9f0fb',
@@ -54,7 +55,7 @@ QPushButton#Danger {{ background:#63333b;border:1px solid #ae5364; }}
 QTabWidget::pane {{ border:1px solid {COLORS['line']};border-radius:8px; }}
 QTabBar::tab {{ padding:11px 17px;background:{COLORS['surface']};color:{COLORS['muted']}; }}
 QTabBar::tab:selected {{ color:white;background:#2a405c;border-bottom:2px solid #62a9ff; }}
-QTreeWidget,QTableWidget,QTextEdit,QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox {{ background:#141e2b;
+QTreeWidget,QTableWidget,QTextEdit,QPlainTextEdit,QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox {{ background:#141e2b;
         border:1px solid #31415a;border-radius:6px;padding:5px;selection-background-color:#2b6197; }}
 QHeaderView::section {{ background:#25344a;color:#dfe9f7;border:0px;padding:7px; }}
 QScrollBar:vertical {{ background:#1e2a3a;width:10px; }}
@@ -143,6 +144,20 @@ class Window(QMainWindow):
         self.jobs = []
         self.proc = None
         self.model_action_busy = False
+        self.editor_loading = False
+        self.editor_dirty = False
+        self.editor_current_alias = None
+        self._tree_loading = False
+        self.exit_requested = False
+        self.tray = None
+        self.log_offsets = {}
+        self.selected_log_alias = ''
+        self.log_timer = QTimer(self)
+        self.log_timer.timeout.connect(self.update_live_log)
+        self.log_timer.start(1000)
+        self.auto_timer = QTimer(self)
+        self.auto_timer.setSingleShot(True)
+        self.auto_timer.timeout.connect(self.auto_save_pending)
         self.last_log_path = None
         self.last_log_text = ''
 
@@ -206,6 +221,7 @@ class Window(QMainWindow):
         self.timer.timeout.connect(self.refresh_status)
         self.timer.start(3000)
 
+        self.setup_tray()
         self.refresh_reports()
         self.refresh_status()
 
@@ -264,199 +280,291 @@ class Window(QMainWindow):
         else:
             QMessageBox.information(self, 'Agent Office', 'Не удалось определить веб-адрес. Укажи office_url в настройках или проверь журнал Agent Office.')
 
+    def setup_tray(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray = None
+            return
+        icon_file = core.ROOT / 'assets' / 'ai-model-lab.svg'
+        icon = QIcon(str(icon_file))
+        if icon.isNull():
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        self.tray = QSystemTrayIcon(icon, self)
+        self.tray.setToolTip('AI Model Lab — локальные ИИ-серверы')
+        menu = QMenu(self)
+        action_show = menu.addAction('Открыть AI Model Lab')
+        action_show.triggered.connect(self.show_from_tray)
+        menu.addAction('Тесты', lambda: self.show_tab_from_tray(2))
+        menu.addAction('Управление', lambda: self.show_tab_from_tray(1))
+        menu.addSeparator()
+        quit_action = menu.addAction('Закрыть приложение (серверы оставить)')
+        quit_action.triggered.connect(self.quit_from_tray)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(self.tray_activated)
+        self.tray.show()
+
+    def tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.show_from_tray()
+
+    def show_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def show_tab_from_tray(self, index):
+        self.show_from_tray()
+        self.tabs.setCurrentIndex(index)
+
+    def quit_from_tray(self):
+        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.information(self, 'Активный тест', 'Сначала останови тест, чтобы не потерять отчёт.')
+            self.show_tab_from_tray(2)
+            return
+        self.exit_requested = True
+        self.close()
+
+    def choose_log(self):
+        aliases = list(multi.all_states())
+        selected = self.selected_alias()
+        if selected:
+            self.selected_log_alias = selected
+        if self.selected_log_alias not in aliases and aliases:
+            self.selected_log_alias = aliases[0]
+
+    def open_full_log(self):
+        self.choose_log()
+        path = multi.log_path(self.selected_log_alias) if self.selected_log_alias else None
+        if not path or not path.is_file():
+            QMessageBox.information(self, 'Логи', 'Для выбранной модели журнала пока нет.')
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f'Журнал {self.selected_log_alias} — {path.name}')
+        dialog.resize(950, 680)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(str(path)))
+        view = QPlainTextEdit()
+        view.setReadOnly(True)
+        size = path.stat().st_size
+        with path.open('rb') as stream:
+            if size > 2_000_000:
+                stream.seek(-2_000_000, 2)
+            content = stream.read().decode('utf-8', 'replace')
+        view.setPlainText(('Показаны последние 2 МБ (файл больше 2 МБ).\n\n' if size > 2_000_000 else '') + content)
+        view.moveCursor(QTextCursor.MoveOperation.End)
+        layout.addWidget(view, 1)
+        row = QHBoxLayout()
+        row.addWidget(btn('Открыть файл внешним редактором', lambda: self.open_url(path.as_uri())))
+        row.addWidget(btn('Закрыть', dialog.accept))
+        layout.addLayout(row)
+        dialog.exec()
+
     # ---------- Models tab ----------
     def build_models(self):
-        w = QWidget()
-        l = QVBoxLayout(w)
-
-        split = QSplitter(Qt.Orientation.Horizontal)
-        l.addWidget(split, 1)
-
-        left_wrap = QWidget()
-        left_layout = QVBoxLayout(left_wrap)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(6)
-
-        self.tree = QTreeWidget()
-        self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(['Модель', 'Контекст', 'Назначение'])
-        self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        w = QWidget(); l = QVBoxLayout(w)
+        split = QSplitter(Qt.Orientation.Horizontal); l.addWidget(split, 1)
+        left_wrap = QWidget(); left_layout = QVBoxLayout(left_wrap)
+        left_layout.setContentsMargins(0, 0, 0, 0); left_layout.setSpacing(6)
+        self.tree = QTreeWidget(); self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(['Модель', 'Статус', 'Контекст', 'Назначение'])
+        self.tree.setRootIsDecorated(False)
+        self.tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         self.tree.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.tree.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.tree.header().setStretchLastSection(False)
-        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.setUniformRowHeights(True)
+        for i, width in enumerate(self.settings_data.get('ui_columns', [250, 145, 100, 340])):
+            if i < self.tree.columnCount():
+                self.tree.setColumnWidth(i, max(65, int(width)))
+        self.tree.header().setSectionsMovable(False)
+        self.tree.header().sectionResized.connect(self.defer_column_save)
         self.tree.itemDoubleClicked.connect(self.open_selected_in_editor)
+        self.tree.currentItemChanged.connect(self.on_model_selected)
+        self.tree.setUniformRowHeights(True)
         left_layout.addWidget(self.tree, 3)
-
-        self.status_label = QLabel('Статус: ожидание')
-        self.status_label.setObjectName('Subheader')
-        left_layout.addWidget(self.status_label)
-
-        logs_group = QGroupBox('Живые логи managed llama.cpp')
-        logs_layout = QVBoxLayout(logs_group)
-        self.live_logs = QTextEdit()
-        self.live_logs.setReadOnly(True)
-        self.live_logs.setMinimumHeight(150)
-        self.live_logs.setPlaceholderText('После запуска модели здесь появятся последние строки журнала llama.cpp')
+        self.status_label = QLabel('Статус: ожидание'); self.status_label.setObjectName('Subheader')
+        self.status_label.setWordWrap(True); left_layout.addWidget(self.status_label)
+        logs_group = QGroupBox('Живой журнал выбранной модели'); logs_layout = QVBoxLayout(logs_group)
+        self.live_logs = QPlainTextEdit(); self.live_logs.setReadOnly(True)
+        self.live_logs.setMaximumBlockCount(1000); self.live_logs.setMinimumHeight(120)
         logs_layout.addWidget(self.live_logs)
+        log_buttons = QHBoxLayout()
+        log_buttons.addWidget(btn('Открыть полный лог', self.open_full_log))
+        log_buttons.addWidget(btn('Показать последнюю запись', self.reset_log_view))
+        logs_layout.addLayout(log_buttons)
         left_layout.addWidget(logs_group, 2)
-
         split.addWidget(left_wrap)
-
-        right = QWidget()
-        r = QVBoxLayout(right)
-        box = QGroupBox('Выбранная модель')
-        f = QVBoxLayout(box)
-        self.model_info = QTextEdit()
-        self.model_info.setReadOnly(True)
-        self.model_info.setMinimumHeight(210)
-        self.model_info.setPlaceholderText('Выбери профиль модели')
-        f.addWidget(self.model_info)
-
+        right = QWidget(); r = QVBoxLayout(right)
+        box = QGroupBox('Выбранная модель'); f = QVBoxLayout(box)
+        self.model_info = QPlainTextEdit(); self.model_info.setReadOnly(True)
+        self.model_info.setMinimumHeight(200)
+        f.addWidget(self.model_info, 1)
         self.model_action_btn = QPushButton('● Статус модели')
         self.model_action_btn.clicked.connect(self.model_action)
         f.addWidget(self.model_action_btn)
-        self.edit_model_btn = btn('✎ Редактировать выбранную модель', self.open_selected_in_editor)
-        f.addWidget(self.edit_model_btn)
+        f.addWidget(btn('✎ Редактировать параметры', self.open_selected_in_editor))
         f.addWidget(btn('🌐 Открыть WebUI', lambda: self.open_url('http://127.0.0.1:3000')))
         f.addWidget(btn('🏢 Открыть Agent Office', self.open_office))
         r.addWidget(box)
-        r.addWidget(QLabel('Контекст 128K подтверждён для Blend Q4/Qwen3.8/Coder. Другие профили экспериментальные.\nДвойной щелчок по модели открывает её редактирование.'))
-        r.addStretch()
-        split.addWidget(right)
-        split.setSizes([700, 520])
-
+        hint = QLabel('Каждая модель: свой порт и GPU. Двойной щелчок → редактор.\nШирина колонок сохраняется автоматически.')
+        hint.setWordWrap(True); r.addWidget(hint)
+        split.addWidget(right); split.setSizes([650, 560])
+        self.column_timer = QTimer(self); self.column_timer.setSingleShot(True)
+        self.column_timer.timeout.connect(self.persist_columns)
         self.populate_model_tree()
-        self.tree.currentItemChanged.connect(self.on_model_selected)
-        if self.tree.topLevelItemCount():
-            self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        if self.tree.topLevelItemCount(): self.tree.setCurrentItem(self.tree.topLevelItem(0))
         return w
 
+    def defer_column_save(self, *args):
+        if hasattr(self, 'column_timer') and not self._tree_loading:
+            self.column_timer.start(700)
+
+    def persist_columns(self):
+        settings = core.settings()
+        settings['ui_columns'] = [self.tree.columnWidth(i) for i in range(self.tree.columnCount())]
+        core.atomic_json(core.SETTINGS, settings)
+        self.settings_data = settings
+
     def populate_model_tree(self):
+        selected = self.selected_alias() if self.tree.topLevelItemCount() else None
+        self._tree_loading = True
         self.tree.clear()
         for p in self.cfg.get('models', []):
-            it = QTreeWidgetItem([p.get('name', p['id']), f"{int(p['context']) // 1024}K", p.get('purpose', '—')])
+            it = QTreeWidgetItem([p.get('name', p['id']), '—', f"{int(p['context']) // 1024}K", p.get('purpose', '—')])
             it.setData(0, Qt.ItemDataRole.UserRole, p['id'])
             self.tree.addTopLevelItem(it)
+        self._tree_loading = False
+        if selected: self.select_tree_alias(self.tree, selected)
+        self.update_model_status_cells()
+
+    def update_model_status_cells(self):
+        palette = {'running': ('● Запущена', '#63d6ac'), 'starting': ('● Загрузка', '#ffc578'),
+                   'error': ('● Ошибка', '#e58f9b'), 'external': ('● Порт занят', '#ffc578'), 'port_conflict': ('● Порт занят', '#ffc578'),
+                   'stopped': ('● Остановлена', '#a1b4cf'), 'unstarted': ('○ Не запущена', '#91a4bc')}
+        states = multi.all_states()
+        for i in range(self.tree.topLevelItemCount()):
+            it = self.tree.topLevelItem(i)
+            alias = it.data(0, Qt.ItemDataRole.UserRole)
+            status, color = palette.get(states.get(alias, {}).get('state', 'unstarted'), ('○ Не запущена', '#91a4bc'))
+            it.setText(1, status)
+            it.setForeground(1, QBrush(QColor(color)))
 
     def on_model_selected(self, *_):
         p = self.selected_model_profile()
-        if not p:
-            self.model_info.setPlainText('Выбери профиль модели')
-            return
-        try:
-            path = str(core.resolve_gguf(p))
-            presence = '✓ GGUF найден'
-        except Exception as exc:
-            path = str(exc)
-            presence = '⚠ Проверить GGUF'
-        text = (
-            f"{p['name']}\n\n"
-            f"Назначение: {p.get('purpose', '—')}\n"
-            f"Alias: {p['id']}\n"
-            f"Контекст: {int(p['context']):,} токенов\n"
-            f"KV: RAM, q8_0 · thinking off {'включен' if p.get('thinking_off') else 'не задан'}\n"
-            f"Путь: {p.get('path', 'поиск по шаблону')}\n"
-            f"Шаблон: {p.get('match', '—')}\n"
-            f"Доп. параметры: n_cpu_moe={p.get('n_cpu_moe', '—')}, mmproj={p.get('mmproj', '—')}\n\n"
-            f"{presence}\n{path}"
-        )
-        self.model_info.setPlainText(text)
+        if not p: return
+        try: path = str(core.resolve_gguf(p)); presence = '✓ GGUF найден'
+        except Exception as exc: path = str(exc); presence = '⚠ Проверить GGUF'
+        state = multi.inspect(p['id'])
+        self.model_info.setPlainText(
+            f"{p['name']}\n\nНазначение: {p.get('purpose', '—')}\n"
+            f"Alias: {p['id']}\nКонтекст: {int(p['context']):,} токенов\n"
+            f"GPU: {p.get('gpu') or 'автоматически'} · порт API: {p.get('port', 8080)}\n"
+            f"Статус: {state.get('state')}\n"
+            f"KV: {p.get('cache_type_k','q8_0')} / {p.get('cache_type_v','q8_0')}\n\n"
+            f"{presence}\n{path}")
+        self.reset_log_view()
         self.refresh_model_action_button()
 
     def refresh_model_action_button(self):
         selected = self.selected_alias()
-        state = core.get_status()
+        if not selected: return
+        state = multi.inspect(selected)
+        status = state.get('state')
         if self.model_action_busy:
-            text = '⏳ Выполняется операция…'
-            style = 'background:#7a5b20;border:1px solid #d0a13c;font-weight:700;'
-        elif state.get('llama') and state.get('alias') == selected:
-            text = '🟢 Модель запущена — остановить'
-            style = 'background:#255b47;border:1px solid #56b790;font-weight:700;'
-        elif state.get('llama') and state.get('alias') and selected and state.get('alias') != selected:
-            text = f"🟡 Работает {state.get('alias')} — переключить на {selected}"
-            style = 'background:#5a4a20;border:1px solid #d6b15b;font-weight:700;'
-        elif state.get('llama_external'):
-            text = '🟠 Порт 8080 занят внешним сервером'
-            style = 'background:#5a3f20;border:1px solid #d18d4b;font-weight:700;'
+            text, style = '⏳ Выполняется операция…', 'background:#675225;border:1px solid #d0a13c;'
+        elif status == 'running':
+            text, style = '🟢 Запущена — остановить эту модель', 'background:#255b47;border:1px solid #56b790;'
+        elif status == 'starting':
+            text, style = '🟡 Модель загружается — остановить', 'background:#5a4a20;border:1px solid #d6b15b;'
+        elif status in ('external','port_conflict'):
+            owner = state.get('other_alias') or 'другим сервером'
+            text, style = f'🟠 Порт занят ({owner}) — настроить', 'background:#5a3f20;border:1px solid #d18d4b;'
+        elif status == 'error':
+            text, style = '🔴 Ошибка — попробовать запустить снова', 'background:#63333b;border:1px solid #ae5364;'
         else:
-            text = '⚪ Модель не запущена — запустить'
-            style = 'background:#245e9a;border:1px solid #438de1;font-weight:700;'
+            p = self.selected_model_profile()
+            text, style = f"⚪ Запустить на GPU {p.get('gpu') or 'авто'} · :{p.get('port',8080)}", 'background:#245e9a;border:1px solid #438de1;'
         self.model_action_btn.setText(text)
-        self.model_action_btn.setStyleSheet(style)
+        self.model_action_btn.setStyleSheet(style + 'font-weight:700;')
 
     def model_action(self):
         selected = self.selected_alias()
-        if not selected:
-            return
-        state = core.get_status()
-        if state.get('llama') and state.get('alias') == selected:
+        if not selected or self.model_action_busy: return
+        state = multi.inspect(selected)
+        if state.get('state') in ('running', 'starting') and state.get('managed'):
+            self.confirm_action(f'Остановить только {selected}?', lambda: multi.stop(selected), after=self.finish_model_action)
+        elif state.get('state') in ('external','port_conflict'):
+            QMessageBox.information(self, 'Порт занят', f"На порту {state.get('port')} работает другая модель или сервер. Откроется редактор — укажи свободный порт.")
+            self.open_selected_in_editor()
+        else:
             self.model_action_busy = True
             self.refresh_model_action_button()
-            self.confirm_action('Остановить текущий llama-server?', lambda: core.stop('llama'), after=self.finish_model_action)
-            return
-        if state.get('llama') and state.get('alias') and state.get('alias') != selected:
-            def task():
-                msg = core.stop('llama')
-                if core.verified('llama') or core.port_open(8080):
-                    raise RuntimeError('Сервер всё ещё работает — переключение отменено. ' + msg)
-                return msg + '\n' + core.start_model(selected)
-            self.model_action_busy = True
-            self.refresh_model_action_button()
-            self.confirm_action(f"Остановить {state.get('alias')} и запустить {selected}?", task, after=self.finish_model_action)
-            return
-        if state.get('llama_external'):
-            QMessageBox.warning(self, 'Внешний сервер', 'На порту 8080 запущен неуправляемый сервер. AI Lab не останавливает его автоматически.')
-            return
-        self.model_action_busy = True
-        self.refresh_model_action_button()
-        self.async_call('Загрузка ' + selected, lambda: core.start_model(selected), after=self.finish_model_action)
+            self.async_call('Загрузка ' + selected, lambda: multi.launch(selected), after=self.finish_model_action)
 
-    def finish_model_action(self, ok, _text):
+    def finish_model_action(self, ok, text):
         self.model_action_busy = False
         self.refresh_status()
 
-    # ---------- Services tab ----------
+    def reset_log_view(self):
+        self.selected_log_alias = self.selected_alias() or ''
+        self.live_logs.clear()
+        self.log_offsets.pop(self.selected_log_alias, None)
+        self.update_live_log()
+
     def build_services(self):
-        w = QWidget()
-        l = QVBoxLayout(w)
-        label = QLabel('Каждый сервис управляется отдельно. Порт 8080 не освобождается автоматически; сторонние процессы не завершаются.')
-        label.setWordWrap(True)
-        l.addWidget(label)
+        w = QWidget(); l = QVBoxLayout(w)
+        label = QLabel('Все llama.cpp запускаются независимо по портам/GPU. Остановка одного не затрагивает другие серверы.')
+        label.setWordWrap(True); l.addWidget(label)
+        self.instances_table = QTableWidget(0, 5)
+        self.instances_table.setHorizontalHeaderLabels(['Модель','GPU','Порт','Статус','PID'])
+        self.instances_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.instances_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.instances_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        l.addWidget(self.instances_table, 1)
+        row = QHBoxLayout()
+        row.addWidget(btn('▶ Запустить модель на вкладке «Модели»', lambda: self.tabs.setCurrentIndex(0)))
+        row.addWidget(btn('⏹ Остановить выбранный экземпляр', self.stop_selected_instance, danger=True))
+        row.addWidget(btn('⏹ Остановить все llama.cpp', self.stop_all_llama, danger=True))
+        l.addLayout(row)
         self.service_labels = {}
         services = [
-            ('llama', 'llama.cpp · модель', self.model_action, lambda: core.stop('llama'), None),
             ('webui', 'Open WebUI · :3000', core.webui_start, core.webui_stop, lambda: self.open_url('http://127.0.0.1:3000')),
             ('office', 'Agent Office', core.office_start, lambda: core.stop('office'), self.open_office),
             ('comfy', 'ComfyUI · :8188', core.comfy_start, lambda: core.stop('comfy'), lambda: self.open_url('http://127.0.0.1:8188')),
         ]
         for sid, name, start, stop, open_action in services:
-            group = QGroupBox(name)
-            row = QHBoxLayout(group)
-            lab = QLabel('Проверяется…')
-            self.service_labels[sid] = lab
-            row.addWidget(lab, 1)
-            if sid == 'llama':
-                row.addWidget(btn('Старт / стоп выбранной модели', start, True))
-            else:
-                row.addWidget(btn('▶ Запустить', lambda s=start, n=name: self.async_call('Запуск ' + n, s), True))
-            row.addWidget(btn('⏹ Остановить', lambda s=stop, n=name: self.confirm_action('Остановить ' + n + '?', s), danger=True))
-            if open_action:
-                row.addWidget(btn('Открыть', open_action))
+            group = QGroupBox(name); item = QHBoxLayout(group)
+            lab = QLabel('Проверяется…'); self.service_labels[sid] = lab
+            item.addWidget(lab, 1)
+            item.addWidget(btn('▶ Запустить', lambda s=start,n=name: self.async_call('Запуск '+n,s), True))
+            item.addWidget(btn('⏹ Остановить', lambda s=stop,n=name: self.confirm_action('Остановить '+n+'?',s), danger=True))
+            item.addWidget(btn('Открыть',open_action))
             l.addWidget(group)
-        l.addWidget(btn('⏹ ОСТАНОВИТЬ ВСЕ управляемые сервисы', self.stop_all, False, True))
-        note = QLabel('«Все» = управляемые llama/Agent Office/ComfyUI и systemd-user Open WebUI. Pi и OpenCode не завершаются.')
-        note.setWordWrap(True)
-        l.addWidget(note)
-        l.addStretch()
+        l.addWidget(btn('⏹ Остановить ВСЕ управляемые AI-сервисы', self.stop_all, danger=True))
         return w
+
+    def update_instances_table(self):
+        current = self.instances_table.currentRow()
+        states = multi.all_states()
+        items = list(states.items())
+        self.instances_table.setRowCount(len(items))
+        for i,(alias,s) in enumerate(items):
+            p = self.profile_lookup(alias) or {}
+            fields = [alias, p.get('gpu') or s.get('gpu') or 'авто', s.get('port',p.get('port',8080)),s.get('state'),s.get('pid','—') if s.get('managed') else '—']
+            for j,value in enumerate(fields): self.instances_table.setItem(i,j,cell(value))
+        if 0 <= current < self.instances_table.rowCount(): self.instances_table.selectRow(current)
+
+    def stop_selected_instance(self):
+        row = self.instances_table.currentRow()
+        item = self.instances_table.item(row, 0) if row >= 0 else None
+        if not item: return
+        alias = item.text()
+        self.confirm_action(f'Остановить только {alias}?', lambda: multi.stop(alias))
+
+    def stop_all_llama(self):
+        self.confirm_action('Остановить все llama-server, запущенные AI Lab?', multi.stop_all)
 
     def stop_all(self):
         def work():
-            return '\n'.join((core.stop('llama'), core.stop('office'), core.stop('comfy'), core.webui_stop()))
+            return '\n'.join((multi.stop_all(), core.stop('office'), core.stop('comfy'), core.webui_stop()))
         self.confirm_action('Остановить ВСЕ управляемые AI-сервисы?', work)
 
     # ---------- Tests tab ----------
@@ -475,20 +583,23 @@ class Window(QMainWindow):
         ]:
             self.test_kind.addItem(name, key)
         form.addWidget(self.test_kind, 0, 1, 1, 3)
-        form.addWidget(QLabel('Android-проект'), 1, 0)
+        form.addWidget(QLabel('Экземпляр модели'), 1, 0)
+        self.test_instance = QComboBox()
+        form.addWidget(self.test_instance, 1, 1, 1, 3)
+        form.addWidget(QLabel('Android-проект'), 2, 0)
         self.project = QLineEdit(self.settings_data.get('android_project', ''))
-        form.addWidget(self.project, 1, 1, 1, 2)
-        form.addWidget(btn('Обзор', self.browse_project), 1, 3)
-        form.addWidget(QLabel('Лимит времени, с'), 2, 0)
+        form.addWidget(self.project, 2, 1, 1, 2)
+        form.addWidget(btn('Обзор', self.browse_project), 2, 3)
+        form.addWidget(QLabel('Лимит времени, с'), 3, 0)
         self.timeout = QSpinBox()
         self.timeout.setRange(30, 7200)
         self.timeout.setValue(int(self.settings_data.get('benchmark_timeout', 1800)))
-        form.addWidget(self.timeout, 2, 1)
-        form.addWidget(QLabel('Лимит инструментов Pi'), 2, 2)
+        form.addWidget(self.timeout, 3, 1)
+        form.addWidget(QLabel('Лимит инструментов Pi'), 3, 2)
         self.budget = QSpinBox()
         self.budget.setRange(1, 200)
         self.budget.setValue(int(self.settings_data.get('tool_budget', 24)))
-        form.addWidget(self.budget, 2, 3)
+        form.addWidget(self.budget, 3, 3)
         row = QHBoxLayout()
         self.run_btn = btn('▶ Запустить испытание', self.launch_test, True)
         row.addWidget(self.run_btn)
@@ -512,11 +623,23 @@ class Window(QMainWindow):
         if chosen:
             self.project.setText(chosen)
 
+    def refresh_test_instances(self):
+        previous = self.test_instance.currentData() if self.test_instance.count() else None
+        self.test_instance.clear()
+        for alias, state in multi.active_instances().items():
+            if state.get('state') == 'running':
+                self.test_instance.addItem(f"{alias} · GPU {state.get('gpu') or 'авто'} · :{state.get('port')}", (alias, state['port']))
+        if previous:
+            for i in range(self.test_instance.count()):
+                if self.test_instance.itemData(i) == previous:
+                    self.test_instance.setCurrentIndex(i)
+                    break
+
     def launch_test(self):
         if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
             return
-        current = core.get_status()
-        alias = current.get('alias')
+        selection = self.test_instance.currentData()
+        alias, port = selection if selection else (None, None)
         if not alias:
             QMessageBox.warning(self, 'Нет модели', 'Сначала запусти llama-server с нужной моделью.')
             return
@@ -524,6 +647,8 @@ class Window(QMainWindow):
         actual = 'speed' if kind.startswith('speed') else ('context' if kind.startswith('context') else kind)
         if actual in ('p1', 'p2'):
             try:
+                if port != 8080:
+                    raise RuntimeError('Android Pi local-lab сейчас настроен на порт 8080. API-тесты доступны на любом порту, Android — только на 8080 до изменения Pi provider.')
                 core.preflight_android()
             except Exception as exc:
                 QMessageBox.warning(self, 'Проверка контекста', str(exc))
@@ -533,8 +658,9 @@ class Window(QMainWindow):
                 return
             if QMessageBox.question(self, 'Доступ Pi', 'Испытание читает Android-проект через Pi read/grep/find/ls.\nЭто НЕ ОС-песочница. Продолжить?') != QMessageBox.StandardButton.Yes:
                 return
+        profile = self.profile_lookup(alias) or {}
         args = [
-            str(core.ROOT / 'bench.py'), '--kind', actual, '--model', alias, '--timeout', str(self.timeout.value()),
+            str(core.ROOT / 'bench.py'), '--kind', actual, '--model', alias, '--port', str(port), '--gpu', str(profile.get('gpu','')), '--timeout', str(self.timeout.value()),
             '--budget', str(self.budget.value()), '--project', self.project.text(),
             '--output-tokens', str(512 if kind == 'speed512' else 256),
             '--target-tokens', str(32768 if kind == 'context32' else 8192)
@@ -662,334 +788,438 @@ class Window(QMainWindow):
         )
 
     # ---------- Settings tab ----------
+    # ---------- Profile editor ----------
+    def profile_lookup(self, alias):
+        return next((p for p in self.cfg.get('models',[]) if p.get('id') == alias), None)
+
     def build_settings(self):
-        w = QWidget()
-        l = QVBoxLayout(w)
-
-        common = QGroupBox('Общие настройки программы')
-        form = QFormLayout(common)
-        self.set_inputs = {}
-        fields = [
-            ('android_project', 'Каталог Android-проекта'), ('office_dir', 'Каталог Agent Office'),
-            ('office_url', 'URL Agent Office (необязательно)'), ('comfy_dir', 'Каталог ComfyUI'),
-            ('webui_service', 'Служба WebUI'), ('gpu_index', 'Индекс GPU для nvidia-smi')
-        ]
-        for key, label in fields:
-            v = QLineEdit(str(self.settings_data.get(key, '')))
-            self.set_inputs[key] = v
-            form.addRow(label, v)
+        w=QWidget(); l=QVBoxLayout(w)
+        common=QGroupBox('Общие настройки программы'); f=QFormLayout(common)
+        self.set_inputs={}
+        for key,label in [('android_project','Каталог Android-проекта'),('office_dir','Каталог Agent Office'),
+                          ('office_url','URL Agent Office'),('comfy_dir','Каталог ComfyUI'),
+                          ('webui_service','Служба WebUI'),('gpu_index','GPU для графика nvidia-smi')]:
+            inp=QLineEdit(str(self.settings_data.get(key,''))); self.set_inputs[key]=inp; f.addRow(label,inp)
         l.addWidget(common)
-
-        split = QSplitter(Qt.Orientation.Horizontal)
-        l.addWidget(split, 1)
-
-        left = QWidget()
-        lv = QVBoxLayout(left)
-        model_bar = QHBoxLayout()
-        model_bar.addWidget(btn('＋ Добавить', self.add_model, True))
-        model_bar.addWidget(btn('－ Удалить', self.delete_model, danger=True))
-        model_bar.addStretch()
-        lv.addLayout(model_bar)
-        self.settings_tree = QTreeWidget()
-        self.settings_tree.setColumnCount(2)
-        self.settings_tree.setHeaderLabels(['ID', 'Название'])
+        split=QSplitter(Qt.Orientation.Horizontal); l.addWidget(split,1)
+        left=QWidget(); lv=QVBoxLayout(left)
+        controls=QHBoxLayout()
+        controls.addWidget(btn('＋ Добавить',self.add_model,True))
+        controls.addWidget(btn('⧉ Клонировать',self.clone_model))
+        controls.addWidget(btn('－ Удалить',self.delete_model,danger=True))
+        lv.addLayout(controls)
+        self.settings_tree=QTreeWidget(); self.settings_tree.setColumnCount(2)
+        self.settings_tree.setHeaderLabels(['ID','Название'])
         self.settings_tree.itemSelectionChanged.connect(self.load_selected_editor_model)
-        lv.addWidget(self.settings_tree, 1)
-        split.addWidget(left)
-
-        editor_wrap = QWidget()
-        ev = QVBoxLayout(editor_wrap)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll_content = QWidget()
-        self.editor_layout = QFormLayout(scroll_content)
-        self.edit_fields = {}
+        lv.addWidget(self.settings_tree,1); split.addWidget(left)
+        right=QWidget(); rv=QVBoxLayout(right)
+        self.editor_tabs=QTabWidget(); self.edit_fields={}
         self.build_model_editor_form()
-        scroll.setWidget(scroll_content)
-        ev.addWidget(scroll)
-        save_row = QHBoxLayout()
-        save_row.addWidget(btn('💾 Сохранить модель', self.save_current_model, True))
-        save_row.addWidget(btn('💾 Сохранить всё (на диск)', self.save_all_settings))
-        save_row.addStretch()
-        ev.addLayout(save_row)
-        split.addWidget(editor_wrap)
-        split.setSizes([340, 780])
-
-        hint = QLabel('Изменяются только файлы в каталоге AI Model Lab. Двойной щелчок по модели на вкладке «Модели» открывает редактирование профиля.')
-        hint.setWordWrap(True)
-        l.addWidget(hint)
-
+        rv.addWidget(self.editor_tabs,1)
+        sr=QHBoxLayout()
+        self.autosave_checkbox=QCheckBox('Автосохранение профиля')
+        self.autosave_checkbox.setChecked(bool(self.settings_data.get('autosave_profiles',False)))
+        self.autosave_checkbox.stateChanged.connect(self.toggle_autosave)
+        sr.addWidget(self.autosave_checkbox)
+        sr.addWidget(btn('💾 Сохранить профиль',self.save_current_model,True))
+        sr.addWidget(btn('💾 Сохранить настройки программы',self.save_all_settings))
+        rv.addLayout(sr)
+        self.editor_hint=QLabel('Изменения профиля не сохранены' )
+        self.editor_hint.setObjectName('Subheader'); rv.addWidget(self.editor_hint)
+        split.addWidget(right); split.setSizes([360,840])
+        note=QLabel('Сохранение не переписывает ~/.pi/agent/models.json. Для Android Pi проверь отдельно contextWindow, maxTokens и API-адрес.')
+        note.setWordWrap(True); l.addWidget(note)
         self.populate_settings_tree()
         if self.settings_tree.topLevelItemCount():
             self.settings_tree.setCurrentItem(self.settings_tree.topLevelItem(0))
         return w
 
-    def build_model_editor_form(self):
-        ef = self.edit_fields
-        ef['id'] = QLineEdit()
-        ef['name'] = QLineEdit()
-        ef['purpose'] = QTextEdit()
-        ef['purpose'].setMaximumHeight(70)
-        ef['context'] = QSpinBox(); ef['context'].setRange(4096, 524288)
-        ef['path'] = QLineEdit()
-        ef['match'] = QLineEdit()
-        ef['thinking_off'] = QCheckBox('Включать --chat-template-kwargs enable_thinking=false')
-        ef['n_cpu_moe'] = QSpinBox(); ef['n_cpu_moe'].setRange(0, 128); ef['n_cpu_moe'].setSpecialValueText('не задан')
-        ef['mmproj'] = QLineEdit()
-        ef['image_min_tokens'] = QSpinBox(); ef['image_min_tokens'].setRange(0, 65535); ef['image_min_tokens'].setSpecialValueText('не задан')
-        ef['temp'] = QDoubleSpinBox(); ef['temp'].setRange(0.0, 5.0); ef['temp'].setSingleStep(0.05)
-        ef['top_p'] = QDoubleSpinBox(); ef['top_p'].setRange(0.0, 1.0); ef['top_p'].setSingleStep(0.05)
-        ef['top_k'] = QSpinBox(); ef['top_k'].setRange(0, 1000)
-        ef['min_p'] = QDoubleSpinBox(); ef['min_p'].setRange(0.0, 1.0); ef['min_p'].setSingleStep(0.01)
-        ef['repeat_penalty'] = QDoubleSpinBox(); ef['repeat_penalty'].setRange(0.5, 5.0); ef['repeat_penalty'].setSingleStep(0.05)
+    def editor_scroll_tab(self, name, widget):
+        scroll=QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(widget)
+        self.editor_tabs.addTab(scroll,name)
 
-        self.editor_layout.addRow('ID / alias', ef['id'])
-        self.editor_layout.addRow('Название', ef['name'])
-        self.editor_layout.addRow('Назначение', ef['purpose'])
-        self.editor_layout.addRow('Контекст', ef['context'])
-        self.editor_layout.addRow('Относительный путь GGUF', ef['path'])
-        self.editor_layout.addRow('Шаблон поиска GGUF', ef['match'])
-        self.editor_layout.addRow('', ef['thinking_off'])
-        self.editor_layout.addRow('n_cpu_moe', ef['n_cpu_moe'])
-        self.editor_layout.addRow('mmproj', ef['mmproj'])
-        self.editor_layout.addRow('image_min_tokens', ef['image_min_tokens'])
-        self.editor_layout.addRow('Sampling temp', ef['temp'])
-        self.editor_layout.addRow('Sampling top_p', ef['top_p'])
-        self.editor_layout.addRow('Sampling top_k', ef['top_k'])
-        self.editor_layout.addRow('Sampling min_p', ef['min_p'])
-        self.editor_layout.addRow('Sampling repeat_penalty', ef['repeat_penalty'])
+    def build_model_editor_form(self):
+        ef=self.edit_fields
+        def text(key): ef[key]=QLineEdit(); return ef[key]
+        def spin(key,lo,hi,default):
+            ef[key]=QSpinBox(); ef[key].setRange(lo,hi); ef[key].setValue(default); return ef[key]
+        def dbl(key,lo,hi,default):
+            ef[key]=QDoubleSpinBox(); ef[key].setDecimals(3); ef[key].setRange(lo,hi); ef[key].setValue(default); return ef[key]
+        def check(key,label): ef[key]=QCheckBox(label); return ef[key]
+        def combo(key,items): ef[key]=QComboBox(); ef[key].addItems(items); return ef[key]
+
+        basic=QWidget(); f=QFormLayout(basic)
+        f.addRow('ID / alias',text('id')); f.addRow('Название',text('name'))
+        ef['purpose']=QPlainTextEdit(); ef['purpose'].setMaximumHeight(90); f.addRow('Назначение',ef['purpose'])
+        f.addRow('Контекст (токены)',spin('context',4096,524288,32768))
+        f.addRow('Порт API',spin('port',1024,65535,8080))
+        f.addRow('GPU (0, 1 или UUID)',text('gpu'))
+        self.gpu_info=QLabel('\n'.join(multi.available_gpu_ids()) or 'GPU не обнаружены через nvidia-smi')
+        self.gpu_info.setWordWrap(True); f.addRow('Найденные GPU',self.gpu_info)
+        f.addRow('Путь GGUF (относительный)',text('path'))
+        f.addRow('Шаблон GGUF',text('match'))
+        f.addRow('Доп. аргументы llama.cpp',text('extra_args'))
+        self.editor_scroll_tab('Основные',basic)
+
+        sampling=QWidget(); f=QFormLayout(sampling)
+        for key,label,lo,hi,default in [
+            ('temp','Temperature',0,5,.7),('top_p','Top P',0,1,.8),('min_p','Min P',0,1,0),
+            ('repeat_penalty','Repeat penalty',.5,5,1)]: f.addRow(label,dbl(key,lo,hi,default))
+        f.addRow('Top K',spin('top_k',0,1000,20))
+        self.editor_scroll_tab('Sampling',sampling)
+
+        memory=QWidget(); f=QFormLayout(memory)
+        f.addRow('GPU layers (-ngl)',spin('ngl',0,999,99))
+        f.addRow('CPU MoE layers',spin('n_cpu_moe',0,128,0))
+        f.addRow('Parallel slots (-np)',spin('parallel',1,64,1))
+        f.addRow('Batch (-b)',spin('batch',1,65536,1024))
+        f.addRow('Micro batch (-ub)',spin('ubatch',1,65536,256))
+        f.addRow('',check('flash_attn','Flash Attention (-fa on)'))
+        f.addRow('',check('no_kv_offload','KV cache в RAM (--no-kv-offload)'))
+        cache_options=['q8_0','f16','q4_0','q4_1','q5_0','q5_1','iq4_nl']
+        f.addRow('KV K',combo('cache_type_k',cache_options))
+        f.addRow('KV V',combo('cache_type_v',cache_options))
+        self.editor_scroll_tab('Память / KV',memory)
+
+        multi_tab=QWidget(); f=QFormLayout(multi_tab)
+        f.addRow('MMProj GGUF',text('mmproj'))
+        f.addRow('Image min tokens',spin('image_min_tokens',0,65535,0))
+        f.addRow('',check('thinking_off','Отключить thinking (если поддерживается)'))
+        f.addRow('',check('jinja','Использовать --jinja'))
+        f.addRow('',check('reasoning_off','Использовать --reasoning off'))
+        self.editor_scroll_tab('Мультимодальность',multi_tab)
+
+        for widget in ef.values():
+            if isinstance(widget,(QLineEdit, QPlainTextEdit)):
+                widget.textChanged.connect(self.mark_editor_dirty)
+            elif isinstance(widget,(QSpinBox,QDoubleSpinBox)):
+                widget.valueChanged.connect(self.mark_editor_dirty)
+            elif isinstance(widget,QComboBox):
+                widget.currentIndexChanged.connect(self.mark_editor_dirty)
+            elif isinstance(widget,QCheckBox):
+                widget.stateChanged.connect(self.mark_editor_dirty)
 
     def populate_settings_tree(self):
         self.settings_tree.clear()
-        for p in self.cfg.get('models', []):
-            it = QTreeWidgetItem([p.get('id', ''), p.get('name', '')])
-            it.setData(0, Qt.ItemDataRole.UserRole, p.get('id'))
+        for p in self.cfg.get('models',[]):
+            it=QTreeWidgetItem([p['id'],p.get('name',p['id'])]); it.setData(0,Qt.ItemDataRole.UserRole,p['id'])
             self.settings_tree.addTopLevelItem(it)
-        self.settings_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.settings_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.settings_tree.header().setSectionResizeMode(0,QHeaderView.ResizeMode.ResizeToContents)
+        self.settings_tree.header().setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
 
     def load_selected_editor_model(self):
-        items = self.settings_tree.selectedItems()
-        if not items:
-            return
-        alias = items[0].data(0, Qt.ItemDataRole.UserRole)
-        p = next((m for m in self.cfg.get('models', []) if m.get('id') == alias), None)
-        if not p:
-            return
-        ef = self.edit_fields
-        ef['id'].setText(p.get('id', ''))
-        ef['name'].setText(p.get('name', ''))
-        ef['purpose'].setPlainText(p.get('purpose', ''))
-        ef['context'].setValue(int(p.get('context', 32768)))
-        ef['path'].setText(p.get('path', ''))
-        ef['match'].setText(p.get('match', ''))
-        ef['thinking_off'].setChecked(bool(p.get('thinking_off', False)))
-        ef['n_cpu_moe'].setValue(int(p.get('n_cpu_moe', 0) or 0))
-        ef['mmproj'].setText(p.get('mmproj', ''))
-        ef['image_min_tokens'].setValue(int(p.get('image_min_tokens', 0) or 0))
-        sampling = p.get('sampling', {}) or {}
-        ef['temp'].setValue(float(sampling.get('temp', 0.7)))
-        ef['top_p'].setValue(float(sampling.get('top_p', 0.8)))
-        ef['top_k'].setValue(int(sampling.get('top_k', 20)))
-        ef['min_p'].setValue(float(sampling.get('min_p', 0.0)))
-        ef['repeat_penalty'].setValue(float(sampling.get('repeat_penalty', 1.0)))
+        if self.editor_loading: return
+        items=self.settings_tree.selectedItems()
+        if not items: return
+        alias=items[0].data(0,Qt.ItemDataRole.UserRole)
+        if self.editor_dirty and self.editor_current_alias and alias!=self.editor_current_alias:
+            if not self.confirm_discard_or_save():
+                self.editor_loading=True
+                self.select_tree_alias(self.settings_tree,self.editor_current_alias)
+                self.editor_loading=False
+                return
+        profile=self.profile_lookup(alias)
+        if not profile: return
+        self.editor_loading=True
+        try:
+            ef=self.edit_fields
+            def set_line(k,value): ef[k].setText(str(value or ''))
+            for k in ('id','name','path','match','gpu','mmproj'):
+                set_line(k,profile.get(k,''))
+            ef['purpose'].setPlainText(profile.get('purpose',''))
+            for key,default in [('context',32768),('port',8080),('ngl',99),('n_cpu_moe',0),('parallel',1),
+                                ('batch',1024),('ubatch',256),('image_min_tokens',0)]:
+                ef[key].setValue(int(profile.get(key,default) or default) if key not in ('n_cpu_moe','image_min_tokens') else int(profile.get(key,0) or 0))
+            sampling=profile.get('sampling',{}) or {}
+            for key,default in [('temp',.7),('top_p',.8),('top_k',20),('min_p',0),('repeat_penalty',1)]:
+                ef[key].setValue(sampling.get(key,default))
+            for key,default in [('flash_attn',True),('no_kv_offload',True),('thinking_off',False),('jinja',True),('reasoning_off',True)]:
+                ef[key].setChecked(bool(profile.get(key,default)))
+            for key in ('cache_type_k','cache_type_v'):
+                idx=ef[key].findText(profile.get(key,'q8_0'))
+                ef[key].setCurrentIndex(idx if idx>=0 else 0)
+            extra=profile.get('extra_args',[])
+            set_line('extra_args', extra if isinstance(extra,str) else ' '.join(extra))
+            self.editor_current_alias=alias
+            self.editor_dirty=False
+            self.editor_hint.setText('Профиль загружен · настройки сохранены только после кнопки')
+        finally:
+            self.editor_loading=False
 
-    def open_selected_in_editor(self, *_):
-        alias = self.selected_alias()
-        if not alias:
-            return
-        self.tabs.setCurrentIndex(4)
-        for i in range(self.settings_tree.topLevelItemCount()):
-            it = self.settings_tree.topLevelItem(i)
-            if it.data(0, Qt.ItemDataRole.UserRole) == alias:
-                self.settings_tree.setCurrentItem(it)
-                self.settings_tree.scrollToItem(it)
-                break
+    def mark_editor_dirty(self,*_):
+        if self.editor_loading or not self.editor_current_alias: return
+        self.editor_dirty=True
+        self.editor_hint.setText('● Есть несохранённые изменения')
+        if self.autosave_checkbox.isChecked(): self.auto_timer.start(800)
+
+    def toggle_autosave(self,*_):
+        settings=core.settings(); settings['autosave_profiles']=self.autosave_checkbox.isChecked()
+        core.atomic_json(core.SETTINGS,settings); self.settings_data=settings
+        if self.autosave_checkbox.isChecked() and self.editor_dirty: self.auto_timer.start(800)
+
+    def auto_save_pending(self):
+        if self.editor_dirty and self.autosave_checkbox.isChecked(): self.save_current_model(silent=True)
+
+    def confirm_discard_or_save(self):
+        dialog=QMessageBox(self)
+        dialog.setWindowTitle('Несохранённый профиль')
+        dialog.setText('Сохранить изменения перед переключением модели?')
+        yes=dialog.addButton('Сохранить',QMessageBox.ButtonRole.AcceptRole)
+        no=dialog.addButton('Не сохранять',QMessageBox.ButtonRole.DestructiveRole)
+        cancel=dialog.addButton('Отмена',QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton()==yes: return self.save_current_model(silent=True)
+        if dialog.clickedButton()==no: self.editor_dirty=False;return True
+        return False
 
     def collect_editor_model(self):
-        ef = self.edit_fields
-        alias = ef['id'].text().strip()
-        if not alias:
-            raise ValueError('ID модели не может быть пустым')
-        model = {
-            'id': alias,
-            'name': ef['name'].text().strip() or alias,
-            'context': int(ef['context'].value()),
-            'purpose': ef['purpose'].toPlainText().strip(),
-        }
-        if ef['path'].text().strip():
-            model['path'] = ef['path'].text().strip()
-        if ef['match'].text().strip():
-            model['match'] = ef['match'].text().strip()
-        if ef['thinking_off'].isChecked():
-            model['thinking_off'] = True
-        if ef['n_cpu_moe'].value() > 0:
-            model['n_cpu_moe'] = int(ef['n_cpu_moe'].value())
-        if ef['mmproj'].text().strip():
-            model['mmproj'] = ef['mmproj'].text().strip()
-        if ef['image_min_tokens'].value() > 0:
-            model['image_min_tokens'] = int(ef['image_min_tokens'].value())
-        sampling = {
-            'temp': float(ef['temp'].value()),
-            'top_p': float(ef['top_p'].value()),
-            'top_k': int(ef['top_k'].value()),
-            'min_p': float(ef['min_p'].value()),
-            'repeat_penalty': float(ef['repeat_penalty'].value()),
-        }
-        model['sampling'] = sampling
-        return model
+        ef=self.edit_fields
+        alias=multi.validate_alias(ef['id'].text().strip())
+        original=self.profile_lookup(self.editor_current_alias) or {}
+        profile=dict(original)
+        for k in ('name','path','match','gpu','mmproj','purpose','extra_args'):
+            value=ef[k].toPlainText().strip() if k=='purpose' else ef[k].text().strip()
+            profile[k]=value
+        profile['id']=alias
+        for k in ('context','port','ngl','n_cpu_moe','parallel','batch','ubatch','image_min_tokens'):
+            profile[k]=int(ef[k].value())
+        for k in ('flash_attn','no_kv_offload','thinking_off','jinja','reasoning_off'):
+            profile[k]=ef[k].isChecked()
+        for k in ('cache_type_k','cache_type_v'): profile[k]=ef[k].currentText()
+        profile['sampling']={k:ef[k].value() for k in ('temp','top_p','top_k','min_p','repeat_penalty')}
+        # Validate, but don't require file existence during editing/import.
+        multi.port_of(profile); multi.gpu_of(profile)
+        if not profile['path'] and not profile['match']:
+            raise ValueError('Укажи путь к GGUF или шаблон для поиска')
+        if profile['ubatch']>profile['batch']:
+            raise ValueError('Micro batch не может быть больше batch')
+        return profile
 
-    def save_current_model(self):
-        items = self.settings_tree.selectedItems()
-        if not items:
-            QMessageBox.warning(self, 'Модель', 'Сначала выбери модель в списке слева.')
-            return
-        original_alias = items[0].data(0, Qt.ItemDataRole.UserRole)
+    def persist_profiles(self):
+        """Back up previous models.json in the same app folder before every edit."""
+        import datetime as dt
+        import shutil
+        backups=core.DATA/'backups'
+        backups.mkdir(parents=True,exist_ok=True)
+        if core.MODELS.is_file():
+            stamp=dt.datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+            dest=backups/f'models_{stamp}.json'
+            shutil.copy2(core.MODELS,dest)
+            dest.chmod(0o600)
+        core.atomic_json(core.MODELS,self.cfg)
+        previous=sorted(backups.glob('models_*.json'))
+        for old in previous[:-20]: old.unlink(missing_ok=True)
+
+    def save_current_model(self, silent=False):
+        alias=self.editor_current_alias
+        if not alias: return False
         try:
-            new_model = self.collect_editor_model()
-            models = self.cfg.get('models', [])
-            ids = [m['id'] for m in models if m['id'] != original_alias]
-            if new_model['id'] in ids:
-                raise ValueError('Модель с таким ID уже существует')
-            for i, p in enumerate(models):
-                if p['id'] == original_alias:
-                    models[i] = new_model
-                    break
-            self.cfg['models'] = models
-            self.populate_settings_tree()
-            self.populate_model_tree()
-            self.select_alias_in_trees(new_model['id'])
-            self.on_model_selected()
-            QMessageBox.information(self, 'Модель', 'Профиль обновлён в памяти. Нажми «Сохранить всё (на диск)», чтобы записать файл.')
+            updated=self.collect_editor_model()
+            if updated['id']!=alias and multi.inspect(alias).get('managed'):
+                raise ValueError('Нельзя менять alias работающей модели — сначала останови её')
+            if any(p['id']==updated['id'] and p['id']!=alias for p in self.cfg.get('models',[])):
+                raise ValueError('Этот ID уже используется')
+            new_models=[updated if p['id']==alias else p for p in self.cfg.get('models',[])]
+            if len(new_models)!=len(self.cfg.get('models',[])):
+                raise ValueError('Исходный профиль не найден')
+            obj={**self.cfg,'models':new_models}
+            self.cfg=obj
+            self.persist_profiles()
+            self.editor_dirty=False;self.editor_current_alias=updated['id']
+            self.populate_settings_tree();self.populate_model_tree()
+            self.select_alias_in_trees(updated['id'])
+            self.editor_hint.setText('✓ Профиль сохранён в models.json')
+            if not silent: QMessageBox.information(self,'Профиль','Изменения сохранены. Для уже запущенной модели применятся после перезапуска.')
+            return True
         except Exception as exc:
-            QMessageBox.warning(self, 'Ошибка модели', str(exc))
+            QMessageBox.warning(self,'Ошибка профиля',str(exc))
+            return False
+
+    def next_port(self):
+        used={int(p.get('port',8080)) for p in self.cfg.get('models',[])}
+        for port in range(8081,8400):
+            if port not in used and not core.port_open(port): return port
+        raise RuntimeError('Нет свободного порта для нового профиля')
+
+    def unique_alias(self,base):
+        ids={p['id'] for p in self.cfg.get('models',[])}
+        name=base;idx=2
+        while name in ids:
+            name=f'{base}-{idx}';idx+=1
+        return name
 
     def add_model(self):
-        base = 'new-model'
-        existing = {p['id'] for p in self.cfg.get('models', [])}
-        alias = base
-        idx = 1
-        while alias in existing:
-            idx += 1
-            alias = f'{base}-{idx}'
-        new_model = {
-            'id': alias,
-            'name': 'Новая модель',
-            'context': 32768,
-            'purpose': 'Заполни назначение модели',
-            'path': '',
-            'match': '*.gguf',
-            'thinking_off': False,
-            'sampling': {'temp': 0.7, 'top_p': 0.8, 'top_k': 20, 'min_p': 0.0, 'repeat_penalty': 1.0}
-        }
-        self.cfg.setdefault('models', []).append(new_model)
-        self.populate_settings_tree()
-        self.populate_model_tree()
+        if self.editor_dirty and not self.confirm_discard_or_save(): return
+        alias=self.unique_alias('new-model')
+        profile={'id':alias,'name':'Новая модель','purpose':'Укажи назначение','context':32768,
+                 'port':self.next_port(),'gpu':'','path':'','match':'*.gguf',
+                 'sampling':{'temp':.7,'top_p':.8,'top_k':20,'min_p':0,'repeat_penalty':1}}
+        self.cfg['models'].append(profile)
+        self.persist_profiles()
+        self.populate_settings_tree();self.populate_model_tree()
         self.select_alias_in_trees(alias)
         self.tabs.setCurrentIndex(4)
-        self.load_selected_editor_model()
+
+    def clone_model(self):
+        if self.editor_dirty and not self.confirm_discard_or_save(): return
+        items=self.settings_tree.selectedItems()
+        if not items:return
+        original=self.profile_lookup(items[0].data(0,Qt.ItemDataRole.UserRole))
+        if not original:return
+        clone=json.loads(json.dumps(original))
+        clone['id']=self.unique_alias(original['id']+'-copy')
+        clone['name']=original.get('name',original['id'])+' (копия)'
+        clone['port']=self.next_port()
+        self.cfg['models'].append(clone)
+        self.persist_profiles()
+        self.populate_settings_tree();self.populate_model_tree()
+        self.select_alias_in_trees(clone['id'])
+        self.tabs.setCurrentIndex(4)
+        QMessageBox.information(self,'Копия модели',f"Создан {clone['id']} на порту {clone['port']}.\nПроверь GPU: сейчас он скопирован из исходного профиля.")
 
     def delete_model(self):
-        items = self.settings_tree.selectedItems()
-        if not items:
+        items=self.settings_tree.selectedItems()
+        if not items:return
+        alias=items[0].data(0,Qt.ItemDataRole.UserRole)
+        def actual_delete():
+            self.cfg['models']=[p for p in self.cfg.get('models',[]) if p.get('id')!=alias]
+            self.persist_profiles()
+            self.editor_dirty=False;self.editor_current_alias=None
+            self.populate_settings_tree();self.populate_model_tree()
+            if self.settings_tree.topLevelItemCount():
+                self.settings_tree.setCurrentItem(self.settings_tree.topLevelItem(0))
+        state=multi.inspect(alias)
+        if state.get('managed') and state.get('alive'):
+            answer=QMessageBox.question(self,'Удаление работающей модели',
+                f'Модель {alias} работает. Сначала остановить её, затем удалить профиль?\nРаботающие другие модели не пострадают.')
+            if answer==QMessageBox.StandardButton.Yes:
+                self.async_call('Остановка перед удалением '+alias,
+                                lambda:multi.stop(alias),
+                                after=lambda ok,txt:actual_delete() if ok and not multi.inspect(alias).get('alive') else None)
             return
-        alias = items[0].data(0, Qt.ItemDataRole.UserRole)
-        if QMessageBox.question(self, 'Удаление', f'Удалить профиль {alias}?') != QMessageBox.StandardButton.Yes:
-            return
-        self.cfg['models'] = [m for m in self.cfg.get('models', []) if m.get('id') != alias]
-        self.populate_settings_tree()
-        self.populate_model_tree()
-        if self.settings_tree.topLevelItemCount():
-            self.settings_tree.setCurrentItem(self.settings_tree.topLevelItem(0))
-        self.on_model_selected()
+        if QMessageBox.question(self,'Удаление',f'Удалить профиль {alias}? GGUF-файл останется на диске.')==QMessageBox.StandardButton.Yes:
+            actual_delete()
+
+    def select_tree_alias(self,tree,alias):
+        for i in range(tree.topLevelItemCount()):
+            item=tree.topLevelItem(i)
+            if item.data(0,Qt.ItemDataRole.UserRole)==alias:
+                tree.setCurrentItem(item);tree.scrollToItem(item);return
+
+    def select_alias_in_trees(self,alias):
+        self.select_tree_alias(self.tree,alias)
+        self.select_tree_alias(self.settings_tree,alias)
+
+    def open_selected_in_editor(self,*_):
+        alias=self.selected_alias()
+        if not alias:return
+        self.tabs.setCurrentIndex(4)
+        self.select_tree_alias(self.settings_tree,alias)
+        self.editor_tabs.setCurrentIndex(0)
 
     def save_all_settings(self):
-        try:
-            old = core.load_json(core.SETTINGS, {}) or {}
-            old.update({k: widget.text().strip() for k, widget in self.set_inputs.items()})
-            core.atomic_json(core.SETTINGS, old)
-            core.atomic_json(core.MODELS, self.cfg)
-            self.settings_data = old
-            QMessageBox.information(self, 'Настройки', 'Сохранено в каталоге приложения.')
-        except Exception as exc:
-            QMessageBox.warning(self, 'Ошибка сохранения', str(exc))
+        data=core.settings()
+        data.update({k:w.text().strip() for k,w in self.set_inputs.items()})
+        core.atomic_json(core.SETTINGS,data)
+        self.settings_data=data
+        QMessageBox.information(self,'Настройки','Настройки программы сохранены. Профили сохраняются отдельно.')
 
-    def select_alias_in_trees(self, alias):
-        for tree in (self.tree, self.settings_tree):
-            for i in range(tree.topLevelItemCount()):
-                it = tree.topLevelItem(i)
-                if it.data(0, Qt.ItemDataRole.UserRole) == alias:
-                    tree.setCurrentItem(it)
-                    tree.scrollToItem(it)
-                    break
-
-    # ---------- Status / logs ----------
-    def append_log(self, text):
-        if hasattr(self, 'test_output'):
-            self.test_output.append('\n' + text)
+    # ---------- Status and logs ----------
+    def append_log(self,text):
+        if hasattr(self,'test_output'):self.test_output.append('\n'+text)
 
     def update_live_log(self):
-        meta = core.verified('llama')
-        path = None
-        if meta and meta.get('log'):
-            path = Path(meta['log'])
-        else:
-            logs = sorted(core.LOGS.glob('llama_*.log'), key=lambda p: p.stat().st_mtime, reverse=True)
-            path = logs[0] if logs else None
-        if not path or not path.is_file():
-            self.live_logs.setPlainText('Нет журнала llama.cpp')
-            return
+        if not hasattr(self,'live_logs'):return
+        alias=self.selected_log_alias or self.selected_alias()
+        if not alias:return
+        path=multi.log_path(alias)
+        if not path or not path.is_file():return
+        key=str(path)
         try:
-            raw = path.read_text(encoding='utf-8', errors='replace')
-        except OSError:
-            return
-        tail = '\n'.join(raw.splitlines()[-120:])
-        if path != self.last_log_path or tail != self.last_log_text:
-            self.live_logs.setPlainText(tail)
-            self.live_logs.moveCursor(QTextCursor.MoveOperation.End)
-            self.last_log_path = path
-            self.last_log_text = tail
+            size=path.stat().st_size
+            offset=self.log_offsets.get(key,max(0,size-50000))
+            if offset>size:offset=0
+            if offset==size:return
+            with path.open('rb') as stream:
+                stream.seek(offset)
+                data=stream.read(min(128000,size-offset))
+                next_offset=stream.tell()
+            self.log_offsets[key]=next_offset
+            if data:
+                self.live_logs.moveCursor(QTextCursor.MoveOperation.End)
+                self.live_logs.insertPlainText(data.decode('utf-8','replace'))
+                self.live_logs.moveCursor(QTextCursor.MoveOperation.End)
+        except OSError:pass
 
     def refresh_status(self):
-        gpu = core.gpu_metrics()
-        ram = core.ram_metrics()
+        gpu=core.gpu_metrics(); ram=core.ram_metrics()
         if gpu:
             self.graph_gpu.add(gpu.get('gpu'))
-            self.graph_vram.maximum = max(22, float(gpu.get('vram_total', 22)) / 1024)
-            self.graph_vram.add(gpu.get('vram', 0) / 1024)
+            self.graph_vram.maximum=max(22,float(gpu.get('vram_total',22))/1024)
+            self.graph_vram.add(gpu.get('vram',0)/1024)
         if ram:
-            self.graph_ram.maximum = max(1, ram.get('ram_total', 64))
+            self.graph_ram.maximum=max(1,ram.get('ram_total',64))
             self.graph_ram.add(ram.get('ram'))
-        self.metrics_label.setText(
-            f"🌡 {gpu.get('temp', '—')} °C · ⚡ {gpu.get('power', '—')} W\n"
-            f"GPU: {gpu.get('gpu', '—')}% · VRAM: {round(gpu.get('vram', 0) / 1024, 2)} / {round(gpu.get('vram_total', 0) / 1024, 2)} GiB\n"
-            f"RAM: {round(ram.get('ram', 0), 1)} / {round(ram.get('ram_total', 0), 1)} GiB · Swap {ram.get('swap', '—')} GiB"
-        )
-        state = core.get_status()
-        names = {
-            'llama': ('работает ' + state.get('alias', '')) if state['llama'] else ('внешний сервер' if state.get('llama_external') else 'остановлен'),
-            'webui': 'работает' if state['webui'] else 'не отвечает',
-            'office': 'запущен (AI Lab)' if state['office'] else 'не подтверждён',
-            'comfy': 'работает' if state['comfy'] else 'не отвечает'
-        }
-        for sid, lab in self.service_labels.items():
-            lab.setText(names.get(sid, '—'))
-            active = (sid == 'llama' and state['llama']) or (sid == 'webui' and state['webui']) or (sid == 'office' and state['office']) or (sid == 'comfy' and state['comfy'])
+        all_gpus = core.all_gpu_metrics()
+        details = [f"GPU {g['index']}: {g['gpu']:.0f}% · VRAM {g['vram']/1024:.1f}/{g['vram_total']/1024:.1f} GiB · {g['temp']:.0f}°C · {g['power']:.0f} W"
+                   for g in all_gpus]
+        if not details: details = ['Нет данных NVIDIA']
+        details.append(f"RAM {ram.get('ram',0):.1f}/{ram.get('ram_total',0):.1f} GiB · Swap {ram.get('swap',0):.1f} GiB")
+        self.metrics_label.setText('\n'.join(details))
+        state=core.get_status()
+        names={'webui':'работает' if state['webui'] else 'не отвечает',
+               'office':'управляемый' if state['office'] else 'не подтверждён',
+               'comfy':'работает' if state['comfy'] else 'не отвечает'}
+        for sid,lab in self.service_labels.items():
+            lab.setText(names.get(sid,'—'))
+            active=(sid=='webui' and state['webui']) or (sid=='office' and state['office']) or (sid=='comfy' and state['comfy'])
             lab.setStyleSheet('color: #63d6ac;' if active else 'color: #e9b5a0;')
-        self.setWindowTitle(f"AI Model Lab — KDE · {state.get('alias') or 'модель не выбрана'} · {state.get('ctx') or '?'} ctx")
-        status_text = f"llama: {names['llama']}"
-        if state.get('llama') and state.get('ctx'):
-            status_text += f" · контекст {state.get('ctx')}"
-        self.status_label.setText(status_text)
+        running=[k for k,v in multi.all_states().items() if v.get('state')=='running' and v.get('managed')]
+        self.setWindowTitle(f'AI Model Lab — KDE · работающих моделей: {len(running)}')
+        self.status_label.setText('Работают: '+(', '.join(running) if running else 'нет'))
+        self.update_model_status_cells()
+        self.update_instances_table()
         self.refresh_model_action_button()
-        self.update_live_log()
+        self.refresh_test_instances()
 
-    def closeEvent(self, event):
-        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
-            QMessageBox.information(self, 'Активный тест', 'Сначала останови текущий тест — чтобы корректно записать отчёт.')
-            event.ignore()
-            return
-        event.accept()
+    def closeEvent(self,event):
+        if self.exit_requested:
+            if any(job.isRunning() for job in self.jobs):
+                QMessageBox.information(self,'Идёт операция','Дождись завершения загрузки или остановки серверов. Можно свернуть программу в трей.')
+                self.exit_requested=False;event.ignore();return
+            if self.editor_dirty and not self.confirm_discard_or_save():
+                self.exit_requested=False;event.ignore();return
+            if self.proc and self.proc.state()!=QProcess.ProcessState.NotRunning:
+                QMessageBox.information(self,'Активный тест','Сначала останови активное испытание.')
+                self.exit_requested=False;event.ignore();return
+            if self.tray:self.tray.hide()
+            event.accept();return
+        dialog=QMessageBox(self)
+        dialog.setWindowTitle('Закрыть AI Model Lab?')
+        dialog.setText('Как закрыть приложение? Работающие серверы не будут остановлены автоматически.')
+        tray_btn=None
+        if self.tray and self.tray.isVisible():
+            tray_btn=dialog.addButton('Свернуть в трей',QMessageBox.ButtonRole.AcceptRole)
+        exit_btn=dialog.addButton('Закрыть приложение (серверы оставить)',QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn=dialog.addButton('Отмена',QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        clicked=dialog.clickedButton()
+        if tray_btn and clicked==tray_btn:
+            event.ignore();self.hide()
+            self.tray.showMessage('AI Model Lab','Приложение работает в трее; серверы продолжают работу.',QSystemTrayIcon.MessageIcon.Information,3000)
+        elif clicked==exit_btn:
+            if any(job.isRunning() for job in self.jobs):
+                QMessageBox.information(self,'Идёт операция','Пока идёт операция, приложение можно свернуть в трей.')
+                event.ignore();return
+            if self.editor_dirty and not self.confirm_discard_or_save():
+                event.ignore();return
+            if self.proc and self.proc.state()!=QProcess.ProcessState.NotRunning:
+                QMessageBox.information(self,'Активный тест','Сначала останови активное испытание.')
+                event.ignore();return
+            self.exit_requested=True
+            if self.tray:self.tray.hide()
+            event.accept()
+        else:event.ignore()
 
 
 def main():

@@ -86,30 +86,67 @@ def server_exe():
 
 
 def server_command(profile):
+    """Build one model server command. GPU affinity is handled in multi.launch env."""
+    import shlex
     exe = server_exe()
-    if not exe.is_file(): raise FileNotFoundError(f'Не найден llama-server: {exe}')
+    if not exe.is_file():
+        raise FileNotFoundError(f'Не найден llama-server: {exe}')
     gguf = resolve_gguf(profile)
     context = int(profile['context'])
-    if not 4096 <= context <= 524288: raise ValueError('Недопустимый context')
-    args = [str(exe), '-m', str(gguf), '-ngl', '99', '-c', str(context), '-np', '1', '-b', '1024',
-            '-ub', '256', '-fa', 'on', '--no-kv-offload', '--cache-type-k', 'q8_0',
-            '--cache-type-v', 'q8_0', '--jinja', '--reasoning', 'off']
+    if not 4096 <= context <= 524288:
+        raise ValueError('Недопустимый context')
+    port = int(profile.get('port', 8080))
+    if not 1024 <= port <= 65535:
+        raise ValueError('Недопустимый порт')
+    parallel = int(profile.get('parallel', 1))
+    batch = int(profile.get('batch', 1024))
+    ubatch = int(profile.get('ubatch', 256))
+    ngl = int(profile.get('ngl', 99))
+    if not (1 <= parallel <= 64 and 1 <= ubatch <= batch <= 65536 and 0 <= ngl <= 999):
+        raise ValueError('Неверные параметры batch/ubatch/parallel/ngl')
+    cache_k = str(profile.get('cache_type_k', 'q8_0'))
+    cache_v = str(profile.get('cache_type_v', 'q8_0'))
+    allowed_cache = {'f16', 'q8_0', 'q4_0', 'q4_1', 'q5_0', 'q5_1', 'iq4_nl'}
+    if cache_k not in allowed_cache or cache_v not in allowed_cache:
+        raise ValueError('Неверный тип KV cache')
+    args = [str(exe), '-m', str(gguf), '-ngl', str(ngl), '-c', str(context),
+            '-np', str(parallel), '-b', str(batch), '-ub', str(ubatch)]
+    if profile.get('flash_attn', True):
+        args += ['-fa', 'on']
+    if profile.get('no_kv_offload', True):
+        args += ['--no-kv-offload']
+    args += ['--cache-type-k', cache_k, '--cache-type-v', cache_v]
+    if profile.get('jinja', True):
+        args.append('--jinja')
+    if profile.get('reasoning_off', True):
+        args += ['--reasoning', 'off']
     if profile.get('n_cpu_moe'):
-        args += ['--n-cpu-moe', str(profile['n_cpu_moe'])]
+        args += ['--n-cpu-moe', str(int(profile['n_cpu_moe']))]
     if profile.get('mmproj'):
         mm = model_root() / profile['mmproj']
-        if not mm.is_file(): raise FileNotFoundError('Не найден mmproj: ' + str(mm))
+        if not mm.is_file():
+            raise FileNotFoundError('Не найден mmproj: ' + str(mm))
         args += ['--mmproj', str(mm)]
     if profile.get('image_min_tokens'):
-        args += ['--image-min-tokens', str(profile['image_min_tokens'])]
+        args += ['--image-min-tokens', str(int(profile['image_min_tokens']))]
     if profile.get('thinking_off'):
         args += ['--chat-template-kwargs', '{"enable_thinking":false}']
     sampling = {'temp': .7, 'top_p': .8, 'top_k': 20, 'min_p': 0, 'repeat_penalty': 1}
     sampling.update(profile.get('sampling', {}))
-    for name, flag in [('temp','--temp'), ('top_p','--top-p'), ('top_k','--top-k'),
-                       ('min_p','--min-p'), ('repeat_penalty','--repeat-penalty')]:
+    for name, flag in [('temp', '--temp'), ('top_p', '--top-p'), ('top_k', '--top-k'),
+                       ('min_p', '--min-p'), ('repeat_penalty', '--repeat-penalty')]:
         args += [flag, str(sampling[name])]
-    args += ['--metrics', '--host', '127.0.0.1', '--port', '8080', '--alias', profile['id']]
+    extra = profile.get('extra_args', [])
+    if isinstance(extra, str):
+        extra = shlex.split(extra)
+    if not isinstance(extra, list) or any(not isinstance(x, str) for x in extra):
+        raise ValueError('extra_args должен быть строкой командных аргументов или списком')
+    reserved = {'-m', '--model', '--model-path', '-c', '--ctx-size', '--port', '--host',
+                '--alias', '-ngl', '--n-gpu-layers'}
+    if any(x.split('=', 1)[0] in reserved for x in extra):
+        raise ValueError('Переопределять model/context/host/port/alias/ngl через extra_args нельзя')
+    args += extra
+    args += ['--metrics', '--host', '127.0.0.1', '--port', str(port), '--alias', profile['id']]
     return args
 
 
@@ -306,11 +343,11 @@ def get_status():
         'office_url':office_url() if office_meta else (settings().get('office_url') or '')}
 
 
-def gpu_metrics():
+def gpu_metrics(gpu_index=None):
     cmd = shutil.which('nvidia-smi')
     if not cmd: return {}
     try:
-        index = str(settings().get('gpu_index',0))
+        index = str(gpu_index if gpu_index is not None and str(gpu_index).strip() else settings().get('gpu_index',0))
         r = subprocess.run([cmd,'--id='+index,'--query-gpu=utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu',
                            '--format=csv,noheader,nounits'],capture_output=True,text=True,timeout=2)
         if r.returncode != 0: return {}
@@ -350,3 +387,26 @@ def discover():
     root=model_root()
     if not root.is_dir(): return []
     return sorted(str(p) for p in root.rglob('*.gguf') if 'mmproj' not in p.name.lower())
+
+
+def all_gpu_metrics():
+    """Query every NVIDIA GPU without assuming there is only one card."""
+    cmd = shutil.which('nvidia-smi')
+    if not cmd: return []
+    try:
+        r = subprocess.run([cmd, '--query-gpu=index,name,utilization.gpu,memory.used,memory.total,power.draw,temperature.gpu',
+                            '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=3)
+        if r.returncode: return []
+        results=[]
+        for line in r.stdout.splitlines():
+            values=[x.strip() for x in line.split(',')]
+            if len(values)!=7: continue
+            try:
+                results.append(dict(index=int(values[0]),name=values[1],gpu=float(values[2]),
+                                    vram=float(values[3]),vram_total=float(values[4]),
+                                    power=float(values[5]),temp=float(values[6])))
+            except ValueError:
+                continue
+        return results
+    except (OSError, subprocess.TimeoutExpired):
+        return []
