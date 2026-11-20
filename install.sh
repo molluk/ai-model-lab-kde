@@ -12,17 +12,21 @@ mkdir -p "$DEST" "$HOME/.local/bin" "$HOME/.local/share/applications"
 if [[ -f "$DEST/gui.py" ]]; then
   BACKUP="$DEST/data/backups/release-$(date +%Y%m%d_%H%M%S)"
   mkdir -p "$BACKUP"
-  for f in core.py multi.py gui.py bench.py client_launcher.py i18n.py custom_services.py run.sh install.sh; do
+  for f in core.py multi.py gui.py bench.py client_launcher.py i18n.py custom_services.py shutdown_manager.py run.sh install.sh; do
     if [[ -f "$DEST/$f" ]]; then cp -p "$DEST/$f" "$BACKUP/$f"; fi
   done
   printf 'Резервная копия прежнего кода: %s\n' "$BACKUP"
 fi
 
 # Preserve existing profiles and reports when upgrading.
-for name in core.py multi.py gui.py bench.py client_launcher.py i18n.py custom_services.py release_preflight.py run.sh README.md README_RU.md LICENSE NOTICE LICENSING_HISTORY.md; do
+for name in core.py multi.py gui.py bench.py client_launcher.py i18n.py custom_services.py shutdown_manager.py release_preflight.py run.sh README.md README_RU.md LICENSE NOTICE LICENSING_HISTORY.md; do
   install -m 0644 "$SOURCE/$name" "$DEST/$name"
 done
 install -m 0755 "$SOURCE/install.sh" "$DEST/install.sh"
+# Ship public examples for tests and as migration references; never overwrite profiles.
+for sample in models.example.json settings.example.json services.example.json; do
+  install -m 0644 "$SOURCE/$sample" "$DEST/$sample"
+done
 for name in models.json settings.json; do
   if [[ ! -f "$DEST/$name" ]]; then
     if [[ -f "$SOURCE/$name" ]]; then

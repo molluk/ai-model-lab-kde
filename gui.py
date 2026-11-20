@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.9 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE v3.10 — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
@@ -38,6 +38,7 @@ import core
 import multi
 import client_launcher
 import custom_services
+import shutdown_manager
 from i18n import T, set_language, get_language, available_languages
 
 COLORS = {
@@ -176,6 +177,8 @@ class Window(QMainWindow):
         self.editor_current_alias = None
         self._tree_loading = False
         self.exit_requested = False
+        self.shutdown_job = None
+        self.shutdown_report = None
         self.tray = None
         self.log_offsets = {}
         self.selected_log_alias = ''
@@ -634,6 +637,8 @@ class Window(QMainWindow):
         menu.addSeparator()
         quit_action = menu.addAction(T('Закрыть приложение (серверы оставить)'))
         quit_action.triggered.connect(self.quit_from_tray)
+        shutdown_action = menu.addAction(T('Закрыть и остановить все управляемые AI-сервисы'))
+        shutdown_action.triggered.connect(self.request_full_exit)
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(self.tray_activated)
         self.tray.show()
@@ -656,6 +661,61 @@ class Window(QMainWindow):
             QMessageBox.information(self, T('Активный тест'), T('Сначала останови тест, чтобы не потерять отчёт.'))
             self.show_tab_from_tray(2)
             return
+        self.exit_requested = True
+        self.close()
+
+    def request_full_exit(self):
+        """User-confirmed full exit, never kill arbitrary third-party processes."""
+        if self.shutdown_job and self.shutdown_job.isRunning():
+            return
+        if any(job.isRunning() for job in self.jobs):
+            QMessageBox.information(self, T('Идёт операция'),
+                                    T('Дождись завершения запуска или остановки сервера.'))
+            return
+        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.information(self, T('Активный тест'),
+                                    T('Сначала останови активное испытание.'))
+            self.show_tab_from_tray(2)
+            return
+        if self.editor_dirty and not self.confirm_discard_or_save():
+            return
+        detail = T('Остановить все управляемые модели llama.cpp, Open WebUI, Agent Office, ComfyUI и пользовательские сервисы, затем закрыть AI Model Lab?')
+        warning = T('Сторонние процессы, внешние серверы, отдельные сессии Pi и OpenCode останутся работать.')
+        if QMessageBox.question(self, T('Полный выход'), detail + '\n\n' + warning) != QMessageBox.StandardButton.Yes:
+            return
+        self.shutdown_report = None
+        self.set_message(T('Остановка управляемых AI-сервисов…'))
+        job = Worker(lambda: json.dumps(shutdown_manager.stop_all_managed(), ensure_ascii=False), self)
+        self.shutdown_job = job
+        job.done.connect(self.on_shutdown_result)
+        job.failed.connect(self.on_shutdown_failed)
+        job.finished.connect(self.on_shutdown_finished)
+        job.start()
+
+    def on_shutdown_result(self, json_text):
+        try:
+            self.shutdown_report = json.loads(json_text)
+        except ValueError as exc:
+            self.shutdown_report = {'success': False, 'failed': [str(exc)], 'external': []}
+
+    def on_shutdown_failed(self, message):
+        self.shutdown_report = {'success': False, 'failed': [message], 'external': []}
+
+    def on_shutdown_finished(self):
+        report = self.shutdown_report or {'success': False, 'failed': ['Нет результата завершения'], 'external': []}
+        self.shutdown_job = None
+        if not report.get('success'):
+            errors = '\n'.join(report.get('failed', [])) or T('Не все процессы остановлены.')
+            QMessageBox.warning(self, T('Неполное завершение'),
+                                T('Не удалось остановить все управляемые сервисы. Приложение останется открытым.') + '\n\n' + errors)
+            self.set_message(T('Остановка завершилась с ошибками — проверь сервисы.'))
+            self.refresh_status()
+            return
+        external = report.get('external', [])
+        if external:
+            QMessageBox.information(self, T('Полный выход'),
+                T('Управляемые процессы остановлены. Неуправляемые экземпляры оставлены работать:') +
+                '\n\n' + '\n'.join(external))
         self.exit_requested = True
         self.close()
 
@@ -1985,43 +2045,53 @@ class Window(QMainWindow):
         self.refresh_test_instances()
 
     def closeEvent(self,event):
+        if self.shutdown_job and self.shutdown_job.isRunning():
+            event.ignore()
+            return
         if self.exit_requested:
             if any(job.isRunning() for job in self.jobs):
                 QMessageBox.information(self,T('Идёт операция'),T('Дождись завершения загрузки или остановки серверов. Можно свернуть программу в трей.'))
-                self.exit_requested=False;event.ignore();return
+                self.exit_requested=False; event.ignore(); return
             if self.editor_dirty and not self.confirm_discard_or_save():
-                self.exit_requested=False;event.ignore();return
+                self.exit_requested=False; event.ignore(); return
             if self.proc and self.proc.state()!=QProcess.ProcessState.NotRunning:
                 QMessageBox.information(self,T('Активный тест'),T('Сначала останови активное испытание.'))
-                self.exit_requested=False;event.ignore();return
-            if self.tray:self.tray.hide()
-            event.accept();return
+                self.exit_requested=False; event.ignore(); return
+            if self.tray: self.tray.hide()
+            event.accept()
+            return
         dialog=QMessageBox(self)
         dialog.setWindowTitle(T('Закрыть AI Model Lab?'))
-        dialog.setText(T('Как закрыть приложение? Работающие серверы не будут остановлены автоматически.'))
+        dialog.setText(T('Выбери способ выхода. Управляемые серверы можно оставить или остановить.'))
         tray_btn=None
         if self.tray and self.tray.isVisible():
             tray_btn=dialog.addButton(T('Свернуть в трей'),QMessageBox.ButtonRole.AcceptRole)
-        exit_btn=dialog.addButton(T('Закрыть приложение (серверы оставить)'),QMessageBox.ButtonRole.DestructiveRole)
+        exit_btn=dialog.addButton(T('Закрыть приложение (серверы оставить)'),QMessageBox.ButtonRole.ActionRole)
+        shutdown_btn=dialog.addButton(T('Закрыть и остановить все'),QMessageBox.ButtonRole.DestructiveRole)
         cancel_btn=dialog.addButton(T('Отмена'),QMessageBox.ButtonRole.RejectRole)
         dialog.exec()
         clicked=dialog.clickedButton()
         if tray_btn and clicked==tray_btn:
-            event.ignore();self.hide()
-            self.tray.showMessage('AI Model Lab',T('Приложение работает в трее; серверы продолжают работу.'),QSystemTrayIcon.MessageIcon.Information,3000)
+            event.ignore(); self.hide()
+            self.tray.showMessage('AI Model Lab',T('Приложение работает в трее; серверы продолжают работу.'),
+                                  QSystemTrayIcon.MessageIcon.Information,3000)
         elif clicked==exit_btn:
             if any(job.isRunning() for job in self.jobs):
                 QMessageBox.information(self,T('Идёт операция'),T('Пока идёт операция, приложение можно свернуть в трей.'))
-                event.ignore();return
+                event.ignore(); return
             if self.editor_dirty and not self.confirm_discard_or_save():
-                event.ignore();return
+                event.ignore(); return
             if self.proc and self.proc.state()!=QProcess.ProcessState.NotRunning:
                 QMessageBox.information(self,T('Активный тест'),T('Сначала останови активное испытание.'))
-                event.ignore();return
+                event.ignore(); return
             self.exit_requested=True
-            if self.tray:self.tray.hide()
+            if self.tray: self.tray.hide()
             event.accept()
-        else:event.ignore()
+        elif clicked==shutdown_btn:
+            event.ignore()
+            self.request_full_exit()
+        else:
+            event.ignore()
 
 
 def main():

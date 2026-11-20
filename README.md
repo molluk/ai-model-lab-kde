@@ -78,3 +78,7 @@ unrelated system processes are never killed by name. Profiles are stored in
 **Security:** entering a command grants it your Linux user privileges. Use only
 commands you trust. Do not put secrets in command-line arguments; they can be
 visible to other local users through process listings.
+
+### Exit modes (v3.10)
+
+Closing the KDE window offers **Minimize to tray**, **Exit (keep servers running)**, **Exit and stop all managed services**, and **Cancel**. Full exit gracefully stops only owned llama.cpp instances, user-created AI services, managed Agent Office/ComfyUI processes, and the configured user-systemd WebUI unit. External processes and independently launched Pi/OpenCode sessions are not terminated. If an owned service fails to stop, the window remains open and reports the error.

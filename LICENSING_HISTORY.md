@@ -1,18 +1,28 @@
-# Current and historical licensing / Текущее и историческое лицензирование
+# Licensing history / История лицензирования
 
-The current AI Model Lab KDE v3.9 source distribution is offered under
-**PolyForm Noncommercial License 1.0.0**. See `LICENSE` and `NOTICE`.
-This is **source-available**, not an OSI-approved open-source license.
-Commercial uses require separate permission from the rightsholder(s).
+## Public reconstructed Git history (v1.0–v3.10)
 
-The original pre-publication ZIP releases may include MIT in certain earlier
-snapshots (notably the v3.6 and v3.7 tags). Relicensing the current version does
-**not** retroactively withdraw any valid prior MIT permissions. Before public
-publication, the project owner should verify authorship and rights to all
-contributions and decide how historic snapshots are presented and licensed.
+Every commit and release tag in this **rebuilt public Git history** contains
+`LICENSE` (PolyForm Noncommercial License 1.0.0) and `NOTICE` with the
+`Required Notice:` attribution line. This history was reconstructed from
+release ZIP files before the first GitHub publication. The licenses have been
+**normalized in the reconstruction** at the project owner’s request; this is
+not a claim that the original archival files had that license at creation.
+Commit SHA identifiers and tag targets therefore differ from earlier recovered
+archives. Functional changes retain the original observed sequence.
 
-Текущая версия v3.9 публикуется на условиях **PolyForm Noncommercial 1.0.0**.
-Это лицензия с доступным исходным кодом, но не open-source по критериям OSI.
-Коммерческое использование требует отдельного разрешения правообладателей.
-Старые разрешения MIT, если они были предоставлены для предыдущих версий,
-автоматически не отменяются сменой лицензии в новой версии.
+**Earlier distribution caveat:** versions previously shared separately in
+archives with MIT license text (notably the pre-publication v3.6/v3.7 ZIPs)
+may already confer rights under those terms. Rewriting the public Git history
+cannot cancel permissions legally granted to recipients of those copies.
+
+## Публичная восстановленная Git-история
+
+Во всех коммитах и тегах **пересобранной публичной истории** присутствуют
+`LICENSE` с PolyForm Noncommercial License 1.0.0 и `NOTICE` с уведомлением
+о правообладателях. Это нормализация истории по просьбе владельца проекта
+**до первой публикации на GitHub**, а не утверждение о том, что исходные
+ZIP-архивы с самого начала содержали именно эту лицензию.
+
+Ранее переданные кому-либо копии под MIT могут сохранять предоставленные
+на момент получения права. Переписывание Git-истории их не отменяет.

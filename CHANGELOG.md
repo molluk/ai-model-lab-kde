@@ -3,10 +3,16 @@
 **Provenance:** the commit history is reconstructed; entries describe observed
 features/changes in the corresponding ZIP, not claims about original commit dates.
 
+## v3.10 — Verified full shutdown
+- Add a fourth close-dialog option: Exit and stop all AI Model Lab-managed services.
+- Include managed llama.cpp servers, Agent Office, ComfyUI, systemd-user WebUI, and custom services.
+- Check termination outcomes; keep GUI open on failure; never kill external processes or independent Pi/OpenCode sessions.
+- Apply PolyForm Noncommercial 1.0.0 to every reconstructed public-history commit and release tag.
+
 ## v3.9 — Custom services and licensing
 - Unified the Start/Stop buttons for built-in WebUI, Agent Office, and ComfyUI services with state indicators.
 - Added editable custom local service profiles, independent background processes, status checks and verified PID-based stopping.
-- Added PolyForm Noncommercial License 1.0.0 and licensing history notices for the current release.
+- Added custom-service controls and initial noncommercial licensing documents (public history later normalized to PolyForm in every snapshot).
 
 ## v3.8 — Localization
 - Added Russian/English language selector in the title area and JSON translation catalogs.

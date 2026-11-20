@@ -31,3 +31,15 @@ Additional reconstructed releases:
 - v3.8: UI localization code and catalogs reconstructed from the v3.8 ZIP.
 - v3.9: user-service and license transition changes recorded as new commits.
 This is a reconstructed provenance trail, not original developer timestamps.
+
+## Public-history license normalization (v3.10)
+
+Before the first GitHub publication, the project owner requested that all
+historical commits and tags in the reconstructed public repository include
+PolyForm Noncommercial 1.0.0. Every reconstructed snapshot was therefore
+rebuilt with the same `LICENSE` and `NOTICE`. The resulting commit and tag
+identifiers differ from previous reconstruction archives. No original author
+or release date is asserted by this reconstruction.
+
+This is a change to the **public reconstruction**, not a revocation of rights
+in pre-publication copies independently distributed with MIT notices.

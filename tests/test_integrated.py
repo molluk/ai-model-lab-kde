@@ -12,7 +12,7 @@ import bench
 
 class TestIntegrated(unittest.TestCase):
     def test_unique_profiles_and_context(self):
-        obj=core.config()
+        obj=core.load_json(core.ROOT / 'models.example.json', {})
         profiles=obj['models']
         self.assertGreaterEqual(len(profiles), 1)
         aliases=[x['id'] for x in profiles]
@@ -20,7 +20,7 @@ class TestIntegrated(unittest.TestCase):
         expected={'blend-q4': 131072, 'qwen38-27b': 131072,
                   'coder-30b': 131072, 'coder-30b-ud': 98304}
         for alias, context in expected.items():
-            profile = core.model_by_id(alias)
+            profile = next((p for p in profiles if p['id'] == alias), None)
             if profile is not None:
                 self.assertEqual(profile['context'], context)
         self.assertTrue(all(x.get('purpose') for x in profiles))
@@ -29,7 +29,8 @@ class TestIntegrated(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             exe=Path(td)/'llama-server';exe.touch(mode=0o755)
             gguf=Path(td)/'model.gguf';gguf.write_text('placeholder')
-            for profile in core.config().get('models', [])[:3]:
+            examples=core.load_json(core.ROOT / 'models.example.json', {})
+            for profile in examples.get('models', [])[:3]:
                 alias = profile['id']
                 with mock.patch.object(core,'server_exe',return_value=exe), mock.patch.object(core,'resolve_gguf',return_value=gguf):
                     args=core.server_command(profile)
@@ -39,7 +40,7 @@ class TestIntegrated(unittest.TestCase):
                 self.assertEqual(args[args.index('--cache-type-k')+1],'q8_0')
                 self.assertEqual(args[args.index('--cache-type-v')+1],'q8_0')
                 self.assertIn('--metrics',args)
-            profile=core.model_by_id('qwen3-vl-30b')
+            profile=next((p for p in examples['models'] if p['id']=='qwen3-vl-30b'), None)
             if profile:
                 with mock.patch.object(core,'server_exe',return_value=exe), mock.patch.object(core,'resolve_gguf',return_value=gguf),mock.patch.object(core,'model_root',return_value=Path(td)):
                     (Path(td)/profile['mmproj']).parent.mkdir(parents=True,exist_ok=True)

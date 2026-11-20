@@ -47,3 +47,7 @@ production application**. Re-check `git ls-files`, `.gitignore`, LICENSE,
 `models.json`, `settings.json`, `data/`, private code, model weights,
 or access tokens. The public Android prompts are generic examples and
 not directly comparable with historical local benchmarks.
+
+### Rewritten reconstructed-history warning
+
+- Public history: PolyForm Noncommercial 1.0.0 is present in every commit and tag; earlier distributed copies may have different terms.

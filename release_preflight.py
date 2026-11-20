@@ -7,7 +7,7 @@ import sys
 
 
 def check_source(root):
-    for name in ('gui.py', 'core.py', 'multi.py', 'bench.py', 'client_launcher.py', 'custom_services.py'):
+    for name in ('gui.py', 'core.py', 'multi.py', 'bench.py', 'client_launcher.py', 'custom_services.py', 'shutdown_manager.py'):
         path = root / name
         compile(path.read_text(encoding='utf-8'), str(path), 'exec')
 

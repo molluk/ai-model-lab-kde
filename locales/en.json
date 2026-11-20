@@ -381,6 +381,20 @@
     "Остановить ": "Stop ",
     "Остановка ": "Stopping ",
     "Удалить профиль сервиса ": "Delete service profile ",
-    "Файлы приложения не удаляются.": "The application files will not be deleted."
+    "Файлы приложения не удаляются.": "The application files will not be deleted.",
+    "Выбери способ выхода. Управляемые серверы можно оставить или остановить.": "Choose how to exit. You can keep managed servers running or stop them.",
+    "Закрыть и остановить все": "Exit and stop all",
+    "Закрыть и остановить все управляемые AI-сервисы": "Exit and stop all managed AI services",
+    "Полный выход": "Full shutdown",
+    "Остановить все управляемые модели llama.cpp, Open WebUI, Agent Office, ComfyUI и пользовательские сервисы, затем закрыть AI Model Lab?": "Stop all managed llama.cpp models, Open WebUI, Agent Office, ComfyUI, and custom services, then exit AI Model Lab?",
+    "Сторонние процессы, внешние серверы, отдельные сессии Pi и OpenCode останутся работать.": "Unmanaged services, external servers, and independent Pi/OpenCode sessions will stay running.",
+    "Остановка управляемых AI-сервисов…": "Stopping managed AI services…",
+    "Неполное завершение": "Incomplete shutdown",
+    "Не все процессы остановлены.": "Not all processes were stopped.",
+    "Не удалось остановить все управляемые сервисы. Приложение останется открытым.": "Some managed services could not be stopped. The application will stay open.",
+    "Остановка завершилась с ошибками — проверь сервисы.": "Shutdown finished with errors — check the services.",
+    "Управляемые процессы остановлены. Неуправляемые экземпляры оставлены работать:": "Managed processes are stopped. These unmanaged services were left running:",
+    "Нет результата завершения": "No shutdown result received",
+    "Дождись завершения запуска или остановки сервера.": "Wait for the current server start/stop operation to finish."
   }
 }

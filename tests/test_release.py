@@ -22,7 +22,7 @@ class TestRelease(unittest.TestCase):
     def test_css_regression_detects_invalid_placeholder(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            for name in ('gui.py', 'core.py', 'multi.py', 'bench.py', 'client_launcher.py', 'custom_services.py'):
+            for name in ('gui.py', 'core.py', 'multi.py', 'bench.py', 'client_launcher.py', 'custom_services.py', 'shutdown_manager.py'):
                 (root / name).write_text((ROOT / name).read_text())
             path = root / 'gui.py'
             path.write_text(path.read_text().replace(
@@ -41,9 +41,10 @@ class TestRelease(unittest.TestCase):
         self.assertEqual(client_launcher.preferred_client(None), 'pi')
 
     def test_new_profiles_use_explicit_preference(self):
-        for profile in core.config()['models']:
+        example_profiles=core.load_json(ROOT / 'models.example.json', {})['models']
+        for profile in example_profiles:
             self.assertIn(profile['preferred_client'], client_launcher.CLIENTS)
-        coder = core.model_by_id('coder-30b')
+        coder = next((p for p in example_profiles if p['id']=='coder-30b'), None)
         if coder:
             self.assertEqual(coder['preferred_client'], 'opencode')
 
