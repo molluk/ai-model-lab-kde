@@ -51,4 +51,9 @@ GGUF paths and endpoints before launching a model.
 
 ## License
 
-PolyForm Noncommercial 1.0.0 (see `LICENSE` and `NOTICE`). Trademarks and model weights are not included.
+**Maintainer:** [@molluk](https://github.com/molluk).
+
+**License:** MIT (see [`LICENSE`](LICENSE)). You may use, modify and redistribute
+the software, including commercially, provided the copyright and license
+notice are kept in copies or substantial portions. Trademarks and model weights
+are not included. Please credit the project when redistributing it.
