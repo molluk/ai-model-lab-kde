@@ -41,11 +41,10 @@ need real-device testing.
 Do not commit `data/`, actual `models.json` or `settings.json`, API keys, private
 Android sources, model weights, or chat history. See [SECURITY.md](SECURITY.md).
 
-**Public-release TODO:** replace the two private-project-specific STB/VOD prompt
-files with generic benchmark scenarios. They are intentionally excluded by
-`.gitignore`, so a development checkout does not contain these tasks until
-new prompts are added. Do not advertise P1/P2 as runnable in a public source
-checkout until this is addressed.
+The public-source P1/P2 Android prompts are generic examples and live under
+`benchmarks/prompts/`. They are **not the same benchmarks** used in private
+Android-project experiments; do not compare scores across these suites as if
+identical. Pi agent tests require separately installed and configured Pi.
 
 ## License
 
