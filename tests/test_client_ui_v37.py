@@ -52,7 +52,7 @@ class TestClientPreference(unittest.TestCase):
             self.assertIn(name, methods)
         source = (ROOT/'gui.py').read_text()
         self.assertIn('self.client_combo = QComboBox()', source)
-        self.assertIn("btn('⌘ Открыть в', self.open_preferred_client", source)
+        self.assertIn("btn(T('⌘ Открыть в'), self.open_preferred_client", source)
         self.assertNotIn('self.client_menu_button = QToolButton()', source)
         self.assertIn('core.update_model_client_preference(alias, client)', source)
         self.assertIn('self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)', source)

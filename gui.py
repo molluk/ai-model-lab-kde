@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI Model Lab KDE v3.8 — Qt6 frontend for standalone local AI laboratory."""
+"""AI Model Lab KDE v3.9 — Qt6 frontend for standalone local AI laboratory."""
 from __future__ import annotations
 import json
 import sys
@@ -37,6 +37,7 @@ except ImportError:
 import core
 import multi
 import client_launcher
+import custom_services
 from i18n import T, set_language, get_language, available_languages
 
 COLORS = {
@@ -324,6 +325,11 @@ class Window(QMainWindow):
                     paths.append(state.get('log'))
         except Exception:
             pass
+        paths.extend(custom_services.active_log_paths())
+        for service_name in ('office', 'comfy'):
+            meta = core.verified(service_name)
+            if meta and meta.get('log'):
+                paths.append(meta['log'])
         return paths
 
     def apply_retention_cleanup(self, startup=False):
@@ -956,21 +962,234 @@ class Window(QMainWindow):
         row.addWidget(btn(T('⏹ Остановить все llama.cpp'), self.stop_all_llama, danger=True))
         l.addLayout(row)
         self.service_labels = {}
-        services = [
+        self.service_buttons = {}
+        self.service_busy = set()
+        self.builtin_services = [
             ('webui', 'Open WebUI · :3000', core.webui_start, core.webui_stop, self.open_webui),
             ('office', 'Agent Office', core.office_start, lambda: core.stop('office'), self.open_office),
             ('comfy', 'ComfyUI · :8188', core.comfy_start, lambda: core.stop('comfy'), lambda: self.open_url('http://127.0.0.1:8188')),
         ]
-        for sid, name, start, stop, open_action in services:
-            group = QGroupBox(name); item = QHBoxLayout(group)
-            lab = QLabel(T('Проверяется…')); self.service_labels[sid] = lab
+        for sid, name, _start, _stop, open_action in self.builtin_services:
+            group = QGroupBox(name)
+            item = QHBoxLayout(group)
+            lab = QLabel(T('Проверяется…'))
+            self.service_labels[sid] = lab
             item.addWidget(lab, 1)
-            item.addWidget(btn(T('▶ Запустить'), lambda s=start,n=name: self.async_call(T('Запуск ')+n,s), True))
-            item.addWidget(btn(T('⏹ Остановить'), lambda s=stop,n=name: self.confirm_action(T('Остановить ')+n+'?',s), danger=True))
-            item.addWidget(btn(T('Открыть'),open_action))
+            toggle = btn(T('▶ Запустить'), lambda _checked=False, sid=sid: self.toggle_builtin_service(sid), primary=True)
+            self.service_buttons[sid] = toggle
+            item.addWidget(toggle)
+            item.addWidget(btn(T('Открыть'), open_action))
             l.addWidget(group)
+
+        custom_box = QGroupBox(T('Пользовательские AI-сервисы'))
+        custom_layout = QVBoxLayout(custom_box)
+        note = QLabel(T('Добавляй свои фоновые приложения: команда запуска, рабочая папка и адрес проверки готовности. Запуск без shell; остановка только подтверждённого PID.'))
+        note.setWordWrap(True)
+        custom_layout.addWidget(note)
+        self.custom_services_table = QTableWidget(0, 5)
+        self.custom_services_table.setHorizontalHeaderLabels([T('Сервис'), T('Статус'), 'PID', T('Управление'), T('Открыть')])
+        self.custom_services_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.custom_services_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.custom_services_table.setMinimumHeight(150)
+        self.custom_services_table.setMaximumHeight(340)
+        self.custom_services_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.custom_services_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.custom_services_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.custom_services_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.custom_services_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        custom_layout.addWidget(self.custom_services_table)
+        controls = QHBoxLayout()
+        controls.addWidget(slim_btn(T('＋ Добавить сервис'), self.add_custom_service, primary=True))
+        controls.addWidget(slim_btn(T('✎ Изменить сервис'), self.edit_custom_service))
+        controls.addWidget(slim_btn(T('－ Удалить сервис'), self.delete_custom_service, danger=True))
+        controls.addStretch()
+        custom_layout.addLayout(controls)
+        l.addWidget(custom_box)
         l.addWidget(btn(T('⏹ Остановить ВСЕ управляемые AI-сервисы'), self.stop_all, danger=True))
+        self.refresh_custom_services()
         return w
+
+    def builtin_state(self, sid, snapshot=None):
+        snapshot = snapshot if snapshot is not None else core.get_status()
+        if sid == 'webui':
+            # A listening :3000 is not proof that AI Lab owns it.
+            try:
+                service = core.settings().get('webui_service', 'open-webui.service')
+                result = subprocess.run(['systemctl', '--user', 'is-active', service],
+                                        text=True, capture_output=True, timeout=1.3)
+                if result.returncode == 0 and result.stdout.strip() == 'active':
+                    return 'running'
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            return 'external' if snapshot.get('webui') else 'stopped'
+        if sid == 'office':
+            return 'running' if core.verified('office') else 'stopped'
+        if sid == 'comfy':
+            if core.verified('comfy'):
+                return 'running'
+            return 'external' if snapshot.get('comfy') else 'stopped'
+        return 'stopped'
+
+    def update_builtin_services(self, snapshot):
+        for sid, lab in self.service_labels.items():
+            button = self.service_buttons[sid]
+            if sid in self.service_busy:
+                label, caption, color, enabled = T('⏳ Выполняется…'), T('⏳ Выполняется…'), '#ffc578', False
+            else:
+                state = self.builtin_state(sid, snapshot)
+                if state == 'running':
+                    label, caption, color, enabled = T('● Работает'), T('■ Остановить'), '#63d6ac', True
+                elif state == 'external':
+                    label, caption, color, enabled = T('● Внешний процесс'), T('Запущено извне'), '#ffc578', False
+                else:
+                    label, caption, color, enabled = T('○ Остановлен'), T('▶ Запустить'), '#a1b4cf', True
+            lab.setText(label)
+            lab.setStyleSheet('color:' + color + ';')
+            button.setText(caption)
+            button.setEnabled(enabled)
+            button.setStyleSheet('background:#63333b;border:1px solid #ae5364;' if 'Остановить' in caption or 'Stop' in caption else '')
+
+    def toggle_builtin_service(self, sid):
+        if sid in self.service_busy:
+            return
+        entry = next((v for v in self.builtin_services if v[0] == sid), None)
+        if not entry:
+            return
+        _, name, start, stop, _ = entry
+        state = self.builtin_state(sid)
+        if state == 'external':
+            QMessageBox.warning(self, T('Сервис запущен извне'), T('Этот процесс не управляется AI Model Lab. Автоматическая остановка запрещена.'))
+            return
+        if state == 'running' and QMessageBox.question(self, T('Подтверждение'), T(f'Остановить {name}?')) != QMessageBox.StandardButton.Yes:
+            return
+        self.service_busy.add(sid)
+        self.update_builtin_services(core.get_status())
+        task = stop if state == 'running' else start
+        self.async_call(T(('Остановка ' if state == 'running' else 'Запуск ')) + name,
+                        task, after=lambda ok, msg, sid=sid: self.builtin_done(sid))
+
+    def builtin_done(self, sid):
+        self.service_busy.discard(sid)
+        self.refresh_status()
+
+    def selected_custom_service(self):
+        row = self.custom_services_table.currentRow()
+        it = self.custom_services_table.item(row, 0) if row >= 0 else None
+        return it.data(Qt.ItemDataRole.UserRole) if it else None
+
+    def refresh_custom_services(self):
+        if not hasattr(self, 'custom_services_table'):
+            return
+        selected = self.selected_custom_service()
+        profiles = custom_services.list_profiles()
+        self.custom_services_table.setRowCount(len(profiles))
+        for row, p in enumerate(profiles):
+            status = custom_services.inspect(p['id'])
+            state = status['state']
+            label = {
+                'running': T('● Работает'), 'starting': T('● Загружается'),
+                'error': T('● Ошибка'), 'stopped': T('○ Остановлен'),
+            }.get(state, T('○ Остановлен'))
+            for column, value in enumerate((p['name'], label, status.get('pid') if status.get('managed') else '—')):
+                item = cell(value)
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, p['id'])
+                self.custom_services_table.setItem(row, column, item)
+            action = btn(T('■ Остановить') if status.get('managed') else T('▶ Запустить'),
+                         lambda _checked=False, sid=p['id']: self.toggle_custom_service(sid))
+            action.setEnabled(p['id'] not in getattr(self, 'custom_busy', set()))
+            self.custom_services_table.setCellWidget(row, 3, action)
+            open_btn = btn(T('Открыть'), lambda _checked=False, url=p.get('open_url', ''): self.open_url(url))
+            open_btn.setEnabled(bool(p.get('open_url')))
+            self.custom_services_table.setCellWidget(row, 4, open_btn)
+            if p['id'] == selected:
+                self.custom_services_table.selectRow(row)
+
+    def toggle_custom_service(self, sid):
+        if not hasattr(self, 'custom_busy'):
+            self.custom_busy = set()
+        if sid in self.custom_busy:
+            return
+        current = custom_services.inspect(sid)
+        is_running = bool(current.get('managed'))
+        if is_running and QMessageBox.question(self, T('Подтверждение'), T(f'Остановить сервис {sid}?')) != QMessageBox.StandardButton.Yes:
+            return
+        self.custom_busy.add(sid)
+        self.refresh_custom_services()
+        fn = (lambda: custom_services.stop(sid)) if is_running else (lambda: custom_services.start(sid))
+        self.async_call(T(('Остановка сервиса ' if is_running else 'Запуск сервиса ')) + sid,
+                        fn, after=lambda ok, msg, sid=sid: self.custom_service_done(sid))
+
+    def custom_service_done(self, sid):
+        self.custom_busy.discard(sid)
+        self.refresh_custom_services()
+
+    def edit_service_dialog(self, original=None):
+        p = original or {'id': '', 'name': '', 'command': [], 'cwd': '', 'health_url': '', 'open_url': ''}
+        dialog = QDialog(self)
+        dialog.setWindowTitle(T('Настройка AI-сервиса'))
+        dialog.resize(660, 340)
+        form = QFormLayout(dialog)
+        fields = {}
+        for key, title in [('id', 'ID / alias'), ('name', T('Название')), ('command', T('Команда запуска (аргументы)')),
+                           ('cwd', T('Рабочий каталог')), ('health_url', T('URL проверки готовности (localhost)')),
+                           ('open_url', T('URL для открытия'))]:
+            val = ' '.join(__import__('shlex').quote(arg) for arg in p.get('command', [])) if key == 'command' else p.get(key, '')
+            widget = QLineEdit(str(val or ''))
+            if key == 'id' and original:
+                widget.setReadOnly(True)
+            if key == 'command':
+                widget.setPlaceholderText('python3 -u main.py --port 8090')
+            if key == 'health_url':
+                widget.setPlaceholderText('http://127.0.0.1:8090/health')
+            if key == 'open_url':
+                widget.setPlaceholderText('http://127.0.0.1:8090')
+            form.addRow(title, widget)
+            fields[key] = widget
+        explanation = QLabel(T('Команда запускается напрямую, без shell. Указывай только доверенные локальные программы. Запуск с правами пользователя.'))
+        explanation.setWordWrap(True)
+        form.addRow(explanation)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        form.addRow(buttons)
+        buttons.rejected.connect(dialog.reject)
+        def save():
+            try:
+                data = custom_services.validate({k: widget.text().strip() for k, widget in fields.items()})
+                profiles = custom_services.list_profiles()
+                if original:
+                    profiles = [data if item['id'] == original['id'] else item for item in profiles]
+                else:
+                    profiles.append(data)
+                custom_services.save_profiles(profiles)
+                dialog.accept()
+            except Exception as exc:
+                QMessageBox.warning(dialog, T('Ошибка настройки'), str(exc))
+        buttons.accepted.connect(save)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.refresh_custom_services()
+            self.set_message(T('Профиль сервиса сохранён'))
+
+    def add_custom_service(self):
+        self.edit_service_dialog()
+
+    def edit_custom_service(self):
+        ident = self.selected_custom_service()
+        p = custom_services.profile_of(ident) if ident else None
+        if p:
+            self.edit_service_dialog(p)
+
+    def delete_custom_service(self):
+        ident = self.selected_custom_service()
+        if not ident:
+            return
+        if custom_services.inspect(ident)['managed']:
+            QMessageBox.information(self, T('Сервис работает'), T('Сначала останови сервис, затем удаляй профиль.'))
+            return
+        if QMessageBox.question(self, T('Удаление'), T(f'Удалить профиль сервиса {ident}? Файлы приложения не удаляются.')) != QMessageBox.StandardButton.Yes:
+            return
+        profiles = [p for p in custom_services.list_profiles() if p['id'] != ident]
+        custom_services.save_profiles(profiles)
+        self.refresh_custom_services()
 
     def update_instances_table(self):
         from datetime import datetime
@@ -1017,7 +1236,11 @@ class Window(QMainWindow):
 
     def stop_all(self):
         def work():
-            return '\n'.join((multi.stop_all(), core.stop('office'), core.stop('comfy'), core.webui_stop()))
+            messages = [multi.stop_all(), core.stop('office'), core.stop('comfy'), core.webui_stop()]
+            for profile in custom_services.list_profiles():
+                if custom_services.inspect(profile['id']).get('managed'):
+                    messages.append(custom_services.stop(profile['id']))
+            return '\n'.join(messages)
         self.confirm_action(T('Остановить ВСЕ управляемые AI-сервисы?'), work)
 
     # ---------- Tests tab ----------
@@ -1742,13 +1965,8 @@ class Window(QMainWindow):
         details.append(f"RAM {ram.get('ram',0):.1f}/{ram.get('ram_total',0):.1f} GiB · Swap {ram.get('swap',0):.1f} GiB")
         self.metrics_label.setText('\n'.join(details))
         state=core.get_status()
-        names={'webui':T('работает') if state['webui'] else T('не отвечает'),
-               'office':T('управляемый') if state['office'] else T('не подтверждён'),
-               'comfy':T('работает') if state['comfy'] else T('не отвечает')}
-        for sid,lab in self.service_labels.items():
-            lab.setText(names.get(sid,'—'))
-            active=(sid=='webui' and state['webui']) or (sid=='office' and state['office']) or (sid=='comfy' and state['comfy'])
-            lab.setStyleSheet('color: #63d6ac;' if active else 'color: #e9b5a0;')
+        self.update_builtin_services(state)
+        self.refresh_custom_services()
         running=[k for k,v in multi.all_states().items() if v.get('state')=='running' and v.get('managed')]
         self.setWindowTitle(T(f'AI Model Lab — KDE · работающих моделей: {len(running)}'))
         self.status_label.setText(T('Работают: ')+(', '.join(running) if running else T('нет')))

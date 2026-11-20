@@ -22,7 +22,7 @@ class TestRelease(unittest.TestCase):
     def test_css_regression_detects_invalid_placeholder(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            for name in ('gui.py', 'core.py', 'multi.py', 'bench.py', 'client_launcher.py'):
+            for name in ('gui.py', 'core.py', 'multi.py', 'bench.py', 'client_launcher.py', 'custom_services.py'):
                 (root / name).write_text((ROOT / name).read_text())
             path = root / 'gui.py'
             path.write_text(path.read_text().replace(
