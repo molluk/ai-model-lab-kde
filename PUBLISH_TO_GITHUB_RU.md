@@ -66,6 +66,6 @@ git push origin --tags
 
 ## 5. Проверка на GitHub
 
-Открой https://github.com/molluk/ai-model-lab-kde . Проверь README с переключением RU/EN, `LICENSE`, `INSTALL_RU.md`, `INSTALL.md`, коммиты, теги, GitHub Actions (Tests). Если всё верно, можно создавать первый Release (Alpha/Experimental) на теге `v3.7`; сначала проверь, что тег относится к нужной версии и текст релиза корректен.
+Открой https://github.com/molluk/ai-model-lab-kde . Проверь README с переключением RU/EN, `LICENSE`, `INSTALL_RU.md`, `INSTALL.md`, коммиты, теги, GitHub Actions (Tests). Если всё верно, можно создавать первый Release (Alpha/Experimental) на теге `v3.9`; сначала проверь, что тег относится к нужной версии и текст релиза корректен.
 
 **Примечание:** история была восстановлена по ZIP и помечена как таковая в `HISTORY_PROVENANCE.md`. Это не первоначальные коммиты разработчиков.

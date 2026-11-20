@@ -3,6 +3,16 @@
 **Provenance:** the commit history is reconstructed; entries describe observed
 features/changes in the corresponding ZIP, not claims about original commit dates.
 
+## v3.9 — Custom services and licensing
+- Unified the Start/Stop buttons for built-in WebUI, Agent Office, and ComfyUI services with state indicators.
+- Added editable custom local service profiles, independent background processes, status checks and verified PID-based stopping.
+- Added PolyForm Noncommercial License 1.0.0 and licensing history notices for the current release.
+
+## v3.8 — Localization
+- Added Russian/English language selector in the title area and JSON translation catalogs.
+- Persisted language preference without restarting managed model servers.
+
+
 ## v3.7
 - Highlight the selected model row with a persistent, contrasting background.
 - Separate the client launch button from the Pi/OpenCode selector.
