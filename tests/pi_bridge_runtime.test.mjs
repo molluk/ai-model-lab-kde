@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -25,7 +25,7 @@ const read = () => list().sort().map(f => {
   return record.event;
 });
 
-assert.equal(list.length, 0); // no events created at module import/factory
+assert.equal(existsSync(join(root, 'pixel-office', 'inbox')), false); // factory does not publish
 assert.ok(events.has('agent_settled'));
 await send('session_start');
 await send('agent_start');
