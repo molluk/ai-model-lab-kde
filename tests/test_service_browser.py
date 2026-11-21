@@ -18,6 +18,7 @@ class TestBrowserPreferences(unittest.TestCase):
     def test_defaults_and_invalid_values(self):
         self.assertEqual(sb.get_mode('webui', {}), 'tab')
         self.assertEqual(sb.get_mode('office', {sb.PREFERENCE_KEY: {'office': 'window'}}), 'window')
+        self.assertEqual(sb.get_mode('office', {sb.PREFERENCE_KEY: {'office': 'app'}}), 'app')
         self.assertEqual(sb.get_mode('office', {sb.PREFERENCE_KEY: {'office': 'bad'}}), 'tab')
         with self.assertRaises(ValueError):
             sb.get_mode('unknown', {})
@@ -28,11 +29,11 @@ class TestBrowserPreferences(unittest.TestCase):
             core.atomic_json(saved, {'language': 'en', 'webui_service': 'custom.service'})
             with mock.patch.object(core, 'SETTINGS', saved), mock.patch.object(core, 'settings', side_effect=lambda: core.load_json(saved, {})):
                 sb.set_mode('webui', 'window')
-                sb.set_mode('office', 'tab')
+                sb.set_mode('office', 'app')
             obj = core.load_json(saved, {})
             self.assertEqual(obj['language'], 'en')
             self.assertEqual(obj['webui_service'], 'custom.service')
-            self.assertEqual(obj[sb.PREFERENCE_KEY], {'webui': 'window', 'office': 'tab'})
+            self.assertEqual(obj[sb.PREFERENCE_KEY], {'webui': 'window', 'office': 'app'})
 
     def test_only_loopback_service_urls(self):
         for url in ('https://127.0.0.1:3000', 'http://evil.example:3000',
@@ -102,6 +103,46 @@ class TestBrowserLaunch(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 sb.open_browser('http://127.0.0.1:3000', 'window')
             tab.assert_not_called()
+
+    def test_app_window_uses_chromium_app_switch_without_shell(self):
+        with mock.patch.object(sb, '_preferred_app_browser', return_value='/usr/bin/chromium'), \
+             mock.patch.object(sb.subprocess, 'Popen') as popen:
+            result = sb.open_browser('http://127.0.0.1:3000', 'app')
+        self.assertIn('без панелей', result)
+        self.assertEqual(popen.call_args.args[0],
+                         ['/usr/bin/chromium', '--app=http://127.0.0.1:3000'])
+        self.assertTrue(popen.call_args.kwargs['start_new_session'])
+        self.assertNotIn('shell', popen.call_args.kwargs)
+
+    def test_app_window_does_not_fall_back_to_browser_tab(self):
+        with mock.patch.object(sb, '_preferred_app_browser', return_value=None), \
+             mock.patch.object(sb.webbrowser, 'open_new_tab') as tab, \
+             mock.patch.object(sb.subprocess, 'Popen') as popen:
+            with self.assertRaisesRegex(RuntimeError, 'Chromium'):
+                sb.open_browser('http://127.0.0.1:3000', 'app')
+            tab.assert_not_called()
+            popen.assert_not_called()
+
+    def test_app_browser_selection_skips_firefox_and_follows_default(self):
+        binaries = {'xdg-settings': '/usr/bin/xdg-settings',
+                    'firefox': '/usr/bin/firefox',
+                    'chromium': '/usr/bin/chromium',
+                    'brave-browser': '/usr/bin/brave-browser'}
+        result = mock.Mock(returncode=0, stdout='brave-browser.desktop')
+        with mock.patch.object(sb.shutil, 'which', side_effect=binaries.get), \
+             mock.patch.object(sb.subprocess, 'run', return_value=result):
+            self.assertEqual(sb._preferred_app_browser(), '/usr/bin/brave-browser')
+        result.stdout = 'firefox.desktop'
+        with mock.patch.object(sb.shutil, 'which', side_effect=binaries.get), \
+             mock.patch.object(sb.subprocess, 'run', return_value=result):
+            self.assertEqual(sb._preferred_app_browser(), '/usr/bin/chromium')
+
+    def test_gui_offers_three_distinct_modes(self):
+        source = (ROOT / 'gui.py').read_text(encoding='utf-8')
+        for line in ("combo.addItem(T('Во вкладке'), 'tab')",
+                     "combo.addItem(T('В отдельном окне браузера'), 'window')",
+                     "combo.addItem(T('В отдельном окне без панелей'), 'app')"):
+            self.assertIn(line, source)
 
     def test_gui_uses_async_start_and_per_service_mode(self):
         source = (ROOT / 'gui.py').read_text(encoding='utf-8')

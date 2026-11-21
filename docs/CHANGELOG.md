@@ -3,6 +3,11 @@
 **Provenance:** the commit history is reconstructed; entries describe observed
 features/changes in the corresponding ZIP, not claims about original commit dates.
 
+## Unreleased — standalone browser app windows
+- Add a third per-service opening mode: standalone Chromium-family `--app=URL` window without browser controls, alongside tabs and regular browser windows.
+- Keep the existing `window` preference semantics; select the default supported app browser without launching shell commands, and fail clearly if none is installed.
+- Extend both service selectors, EN translations, RU/EN guides, and headless dispatch/preference regression tests.
+
 ## Unreleased — Pi Office Bridge
 - Add optional observer extension for real Pi lifecycle, tool, and UI-wait events, using Agent Office's existing atomic inbox protocol.
 - Auto-load in Pi launched through AI Model Lab, including isolated provider profiles; skip explicit load when the bridge is already present in the Pi extension directory.
