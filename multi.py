@@ -6,7 +6,6 @@ identity. Never terminate a process that fails the /proc identity checks.
 from __future__ import annotations
 import contextlib
 import datetime as dt
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -17,6 +16,7 @@ import subprocess
 import time
 
 import core
+from platform_lock import exclusive_lock
 
 INSTANCES = core.DATA / 'instances'
 _CHILDREN = {}  # Hold Popen handles until graceful shutdown; prevents zombies/warnings.
@@ -56,11 +56,8 @@ def locked():
     core.prepare()
     INSTANCES.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (INSTANCES / '.lock').open('a+b') as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
+        with exclusive_lock(lock):
             yield
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def metadata(alias):

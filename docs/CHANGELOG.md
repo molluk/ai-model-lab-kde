@@ -3,6 +3,12 @@
 **Provenance:** the commit history is reconstructed; entries describe observed
 features/changes in the corresponding ZIP, not claims about original commit dates.
 
+## Unreleased — experimental Windows bootstrap (feature branch)
+- Add a Windows onedir PyInstaller build script and Windows CI smoke/packaging workflow.
+- Keep Linux installed configuration layout unchanged; Windows user configuration and data are placed in LocalAppData.
+- Replace a POSIX-only import/lock with a platform-specific advisory lock module; include new modules in the Linux installer and preflight.
+- Document that safe Windows process identity/termination, model management and service integration are not yet implemented.
+
 ## Unreleased — standalone browser app windows
 - Add a third per-service opening mode: standalone Chromium-family `--app=URL` window without browser controls, alongside tabs and regular browser windows.
 - Keep the existing `window` preference semantics; select the default supported app browser without launching shell commands, and fail clearly if none is installed.

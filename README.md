@@ -1,6 +1,6 @@
 # AI Model Lab — local AI workstation manager for KDE
 
-**English** · [Русский](docs/README_RU.md) · [Documentation](docs/INDEX.md) · [Changelog](docs/CHANGELOG.md)
+**English** · [Русский](docs/README_RU.md) · [Documentation](docs/INDEX.md) · [Windows port plan](docs/WINDOWS_PORT.md) · [Changelog](docs/CHANGELOG.md)
 
 AI Model Lab is an experimental desktop application built with **Python and Qt6** for launching, monitoring and testing local language models on Linux. It manages independent [llama.cpp](https://github.com/ggml-org/llama.cpp) servers and integrates optional AI clients and services.
 
