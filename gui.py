@@ -478,12 +478,13 @@ class Window(QMainWindow):
     def create_browser_mode_combo(self, sid):
         """A per-service preference, shared across Models and Management tabs."""
         combo = QComboBox()
-        combo.setMinimumWidth(128)
+        combo.setMinimumWidth(238)
         combo.addItem(T('Во вкладке'), 'tab')
-        combo.addItem(T('В отдельном окне'), 'window')
+        combo.addItem(T('В отдельном окне браузера'), 'window')
+        combo.addItem(T('В отдельном окне без панелей'), 'app')
         index = combo.findData(service_browser.get_mode(sid, self.settings_data))
         combo.setCurrentIndex(max(0, index))
-        combo.setToolTip(T('Режим открытия сохраняется отдельно для каждого сервиса'))
+        combo.setToolTip(T('Окно без панелей требует Chromium, Chrome, Brave, Vivaldi или Edge. Настройка сохраняется для каждого сервиса.'))
         combo.currentIndexChanged.connect(
             lambda _index, service=sid, widget=combo: self.change_browser_mode(service, widget)
         )

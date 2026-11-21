@@ -15,7 +15,7 @@ import webbrowser
 
 import core
 
-OPEN_MODES = ('tab', 'window')
+OPEN_MODES = ('tab', 'window', 'app')
 SERVICES = ('webui', 'office', 'comfy')
 PREFERENCE_KEY = 'browser_open_modes'
 
@@ -25,6 +25,13 @@ _BROWSER_NAMES = (
     'zen-browser', 'chromium', 'chromium-browser', 'google-chrome',
     'google-chrome-stable', 'brave-browser', 'brave', 'vivaldi',
     'vivaldi-stable', 'microsoft-edge', 'falkon',
+)
+
+
+# Chromium-family browsers support standalone windows without browser controls.
+_APP_BROWSER_NAMES = (
+    'chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable',
+    'brave-browser', 'brave', 'vivaldi', 'vivaldi-stable', 'microsoft-edge',
 )
 
 
@@ -150,8 +157,8 @@ def ensure_ready(service_id: str) -> str:
     raise ValueError(f'Неизвестный сервис: {service_id}')
 
 
-def _preferred_window_browser():
-    """Try the KDE/default .desktop browser first, then supported installed browsers."""
+def _preferred_browser(names):
+    """Prefer KDE's default browser if supported, otherwise an installed candidate."""
     preferred = ''
     if shutil.which('xdg-settings'):
         try:
@@ -161,20 +168,29 @@ def _preferred_window_browser():
                 preferred = proc.stdout.strip().lower()
         except (OSError, subprocess.TimeoutExpired):
             pass
-    for name in _BROWSER_NAMES:
+    for name in names:
         if name in preferred and shutil.which(name):
             return shutil.which(name)
-    for name in _BROWSER_NAMES:
+    for name in names:
         if shutil.which(name):
             return shutil.which(name)
     return None
 
 
-def open_browser(url: str, mode: str) -> str:
-    """Open as a browser tab or explicitly request a new browser window.
+def _preferred_window_browser():
+    """Browser with an explicit --new-window flag."""
+    return _preferred_browser(_BROWSER_NAMES)
 
-    Tabs depend on the default browser's desktop integration and settings.
-    Windows require a supported installed browser; never silently use a tab.
+
+def _preferred_app_browser():
+    """App-window mode is limited to browsers supporting --app=URL."""
+    return _preferred_browser(_APP_BROWSER_NAMES)
+
+def open_browser(url: str, mode: str) -> str:
+    """Open a tab, a regular browser window, or a standalone app-style window.
+
+    Standalone mode uses Chromium's --app=URL, not a native KDE widget.
+    Never silently fall back to another mode.
     """
     validate_local_url(url)
     if mode == 'tab':
@@ -194,4 +210,17 @@ def open_browser(url: str, mode: str) -> str:
                          stderr=subprocess.DEVNULL,
                          start_new_session=True)
         return 'Открыто отдельное окно: ' + executable
+    if mode == 'app':
+        executable = _preferred_app_browser()
+        if not executable:
+            raise RuntimeError(
+                'Для окна без панелей браузера необходим Chromium, Google Chrome, '
+                'Brave, Vivaldi или Microsoft Edge. Подходящий браузер не найден.'
+            )
+        subprocess.Popen([executable, '--app=' + url],
+                         stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        return 'Открыто отдельное окно без панелей браузера: ' + executable
     raise ValueError('Неизвестный режим открытия браузера')

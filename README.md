@@ -12,7 +12,7 @@ AI Model Lab is an experimental desktop application built with **Python and Qt6*
 - **Multiple independent servers:** assign a port and NVIDIA GPU index/UUID per profile; run more than one model simultaneously when hardware resources permit.
 - **Local monitoring:** GPU load, VRAM, RAM, process status, live logs and benchmark history.
 - **AI clients:** open a running model with **Pi** or **OpenCode**, keeping per-model client preferences. Optional [Pi Office Bridge](docs/PI_OFFICE_BRIDGE.md) displays actual Pi sessions in Agent Office.
-- **Services:** manage compatible Open WebUI, Agent Office and ComfyUI setups, or add custom local services.
+- **Services:** manage compatible Open WebUI, Agent Office and ComfyUI setups, or add custom local services. Open each built-in web UI in a browser tab, regular window, or standalone Chromium-style app window without browser controls.
 - **Benchmarks:** API throughput, simple QA checks, synthetic context-recall tasks and sample Android code-navigation scenarios; results stay on your machine.
 - **Localization:** Russian and English UI; translation catalogs are extendable.
 - **KDE system tray:** close the GUI while keeping managed servers running, or explicitly stop all owned services when exiting.

@@ -73,9 +73,11 @@ Re-run `bash ./install.sh` from a newer release. App sources are updated; local 
 
 ## Opening WebUI and Agent Office with one click
 
-On the **Models** page, select **In a browser tab** or **In a separate window**
-next to **Open WebUI** / **Open Agent Office**. Each service remembers its own
-preference. The same controls appear under **Management**.
+On the **Models** page, choose **In a browser tab**, **In a separate
+browser window**, or **In a separate window without browser controls**
+next to **Open WebUI** / **Open Agent Office**. Each service remembers its
+own preference. The same controls appear under **Management** (including ComfyUI).
+Existing `window` settings retain normal browser-window behavior.
 
 Click **Open** once. If the service is stopped, AI Model Lab starts it, waits
 for the local HTTP interface to respond, then opens the selected browser view.
@@ -90,7 +92,15 @@ If its URL cannot be discovered from the managed process log, set `office_url`
 to the actual local HTTP URL.
 
 A new *tab* is requested through desktop browser integration; the browser's
-own settings may change whether this reuses a window. A *separate window*
-requires a supported installed browser such as Firefox, Chromium or Brave;
-the app explicitly requests `--new-window` and reports an error rather than
-silently substituting a tab.
+own settings may change whether this reuses a window. A *regular browser window*
+requires a supported installed browser (e.g. Firefox, Chromium or Brave) and
+uses `--new-window`.
+
+An *app window* omits tabs, the address bar, and browser navigation controls.
+It launches a locally installed Chromium-family browser (Chromium, Google Chrome,
+Brave, Vivaldi or Microsoft Edge) with `--app=http://127.0.0.1:<port>`.
+This is a separate browser-powered web-app window, **not** a native KDE widget
+or a browser plugin. Firefox-only installations need a supported Chromium-family
+browser for this mode. If the requested mode cannot be launched, AI Model Lab
+reports an error and never silently switches to another mode. The service
+remains running.
