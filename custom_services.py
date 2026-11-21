@@ -160,6 +160,11 @@ def _expand_command(profile):
 
 
 def start(ident):
+    if os.name == 'nt':
+        raise NotImplementedError(
+            'Запуск пользовательских сервисов на Windows ещё не поддерживается: '
+            'требуется безопасная проверка владельца процесса.'
+        )
     p = profile_of(ident)
     if not p:
         raise ValueError('Unknown user service')

@@ -202,6 +202,11 @@ def verified(name):
 
 
 def spawn(name, args, cwd=None, **extra):
+    if os.name == 'nt':
+        raise NotImplementedError(
+            'Запуск управляемых сервисов на Windows временно отключён: '
+            'без проверки владельца и жизненного цикла процессов это небезопасно.'
+        )
     prepare()
     log = LOGS / f'{name}_{dt.datetime.now():%Y%m%d_%H%M%S}.log'
     with log.open('ab', buffering=0) as out:

@@ -148,6 +148,11 @@ def active_instances():
 
 
 def launch(alias):
+    if os.name == 'nt':
+        raise NotImplementedError(
+            'Запуск llama-server на Windows пока не поддерживается: '
+            'требуется проверка идентичности PID, exe и времени создания процесса.'
+        )
     p = profile_by_id(alias)
     if not p:
         raise ValueError('Неизвестный профиль: ' + alias)

@@ -45,6 +45,21 @@ class PathsTest(unittest.TestCase):
             with self.subTest(name=name):
                 importlib.import_module(name)
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows process guard')
+    def test_unsafe_process_launches_are_explicitly_blocked(self):
+        import core
+        import multi
+        import custom_services
+        import client_launcher
+        for action in (
+            lambda: core.spawn('webui', ['echo', 'hello']),
+            lambda: multi.launch('no-model'),
+            lambda: custom_services.start('no-service'),
+            lambda: client_launcher.execute('pi', 'no-model'),
+        ):
+            with self.assertRaises(NotImplementedError):
+                action()
+
     def test_existing_config_names_not_changed(self):
         import core
         self.assertEqual(core.MODELS.name, 'models.json')
