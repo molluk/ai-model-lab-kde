@@ -15,6 +15,7 @@ AI Model Lab is an experimental desktop application built with **Python and Qt6*
 - **Services:** manage compatible Open WebUI, Agent Office and ComfyUI setups, or add custom local services. Open each built-in web UI in a browser tab, regular window, or standalone Chromium-style app window without browser controls.
 - **Benchmarks:** API throughput, simple QA checks, synthetic context-recall tasks and sample Android code-navigation scenarios; results stay on your machine.
 - **Localization:** Russian and English UI; translation catalogs are extendable.
+- **Build identification:** footer shows the application version and exact installed Git commit (full SHA on hover).
 - **KDE system tray:** close the GUI while keeping managed servers running, or explicitly stop all owned services when exiting.
 
 Separate models can share a GPU **only if sufficient VRAM/RAM is available**. GPU memory is not automatically pooled, and simultaneous execution is not a guarantee that both models will fit.

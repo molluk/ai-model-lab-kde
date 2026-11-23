@@ -40,6 +40,7 @@ import client_launcher
 import custom_services
 import shutdown_manager
 import service_browser
+import version_info
 from i18n import T, set_language, get_language, available_languages
 
 COLORS = {
@@ -264,9 +265,18 @@ class Window(QMainWindow):
         self.tab_settings = self.build_settings()
         self.tabs.addTab(self.tab_settings, T('🔧 Настройки'))
 
+        # Persistent build identity, visible even when the selected tab changes.
+        footer = QHBoxLayout()
         self.message = QLabel(T('Готово. Все новые отчёты: ') + str(core.REPORTS))
         self.message.setObjectName('Subheader')
-        layout.addWidget(self.message)
+        footer.addWidget(self.message, 1)
+        build = version_info.read_build_info()
+        self.version_label = QLabel(version_info.short_label(build))
+        self.version_label.setObjectName('Subheader')
+        self.version_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.version_label.setToolTip(version_info.detail_label(build, T))
+        footer.addWidget(self.version_label)
+        layout.addLayout(footer)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_status)

@@ -3,6 +3,12 @@
 **Provenance:** the commit history is reconstructed; entries describe observed
 features/changes in the corresponding ZIP, not claims about original commit dates.
 
+## Unreleased — installed build identification
+- Show version and short installed Git commit hash at the lower-right edge of the main window; show full SHA and local-change marker on hover.
+- Generate the build manifest during Linux installation from the actual source checkout, without changing user profiles or depending on Git at GUI runtime.
+- Show `unknown` when commit provenance is unavailable (e.g., extracted source archive), never invent a SHA.
+- Add headless regression tests and RU/EN documentation.
+
 ## Unreleased — standalone browser app windows
 - Add a third per-service opening mode: standalone Chromium-family `--app=URL` window without browser controls, alongside tabs and regular browser windows.
 - Keep the existing `window` preference semantics; select the default supported app browser without launching shell commands, and fail clearly if none is installed.

@@ -21,3 +21,5 @@ settings.json
 
 # User-defined executable service profiles (local paths/credentials)
 services.json
+# Generated only by install/build steps; never commit a locally produced SHA.
+build_info.json
