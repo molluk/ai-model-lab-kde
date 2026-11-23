@@ -19,7 +19,11 @@ try {
     python -m unittest discover -s tests -p "test_windows_bootstrap.py" -v
     if ($LASTEXITCODE -ne 0) { throw "Windows bootstrap tests failed." }
 
+    python version_info.py --source $Root --write (Join-Path $Root "build_info.json")
+    if ($LASTEXITCODE -ne 0) { throw "Failed to embed build revision." }
+
     $Data = @(
+        "build_info.json;.",
         "assets;assets",
         "locales;locales",
         "docs;docs",

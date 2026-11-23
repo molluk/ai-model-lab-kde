@@ -53,12 +53,17 @@ class PathsTest(unittest.TestCase):
         import client_launcher
         for action in (
             lambda: core.spawn('webui', ['echo', 'hello']),
-            lambda: multi.launch('no-model'),
             lambda: custom_services.start('no-service'),
             lambda: client_launcher.execute('pi', 'no-model'),
         ):
             with self.assertRaises(NotImplementedError):
                 action()
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows model launch')
+    def test_missing_model_is_not_launched(self):
+        import multi
+        with self.assertRaises(ValueError):
+            multi.launch('missing-model-test')
 
     def test_existing_config_names_not_changed(self):
         import core

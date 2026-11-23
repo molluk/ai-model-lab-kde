@@ -24,6 +24,7 @@ jobs:
         run: |
           python release_preflight.py
           python -m unittest discover -s tests -p test_windows_bootstrap.py -v
+          python -m unittest discover -s tests -p test_windows_process.py -v
           python -c "import gui; print('Qt GUI import OK')"
       - name: Package experimental Windows onedir executable
         shell: powershell

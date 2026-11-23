@@ -20,13 +20,15 @@ Private configs, tokens, models and Android projects must not be committed.
 ## Remaining work
 
 1. [x] Platform-safe import/locking, data directory and Windows CI packaging.
-2. [ ] Cross-platform owned-process identity (creation timestamp, executable, argv)
-   and safe termination, preventing PID reuse and accidental external termination.
-3. [ ] Multiple Windows `llama-server.exe` instances, GPU UUID isolation, VRAM tests.
+2. [x] Windows PID ownership checks (creation time, executable, full argv)
+   and fail-closed termination, with Windows CI live-process tests.
+3. [ ] Live CUDA tests for multiple `llama-server.exe` profiles, GPU UUID isolation and VRAM budgets (launch/stop implemented experimentally).
 4. [ ] Windows Pi/OpenCode, WebUI, Agent Office, ComfyUI and benchmarks.
 5. [ ] Native RAM/CPU measurements, exit handling, localized errors.
 6. [ ] Run real Windows 10 and Windows 11 tests; installer/signing.
 
-Until process ownership is implemented, Windows users must not treat model
-and service start/stop controls as functional or safe. Use the Linux release
-from `main` for production.
+Windows model launch/stop is experimental and uses `psutil` identity checks.
+Configure the installed Windows `llama-server.exe` and your GGUF directory.
+Windows CI exercises process identity with a test subprocess, not with CUDA.
+Other AI services and clients still need Windows-specific integration. This is
+not a supported Windows release; use Linux `main` for production.
