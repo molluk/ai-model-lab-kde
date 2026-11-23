@@ -406,6 +406,11 @@
     "Не удалось открыть браузер": "Could not open browser",
     "Подготовка сервиса ": "Preparing service ",
     "Открыть WebUI": "Open WebUI",
-    "Открыть Agent Office": "Open Agent Office"
+    "Открыть Agent Office": "Open Agent Office",
+    "Версия": "Version",
+    "Коммит": "Commit",
+    "Сборка": "Build",
+    "Локальные изменения": "Local changes",
+    "Неизвестно": "Unknown"
   }
 }

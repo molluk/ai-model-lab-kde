@@ -21,6 +21,8 @@ settings.json
 
 # User-defined executable service profiles (local paths/credentials)
 services.json
+# Generated build provenance.
+build_info.json
 
 # Build outputs, Windows packaging and local virtual environments.
 /dist/

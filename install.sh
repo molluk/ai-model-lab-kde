@@ -12,17 +12,19 @@ mkdir -p "$DEST" "$HOME/.local/bin" "$HOME/.local/share/applications"
 if [[ -f "$DEST/gui.py" ]]; then
   BACKUP="$DEST/data/backups/release-$(date +%Y%m%d_%H%M%S)"
   mkdir -p "$BACKUP"
-  for f in core.py multi.py platform_paths.py platform_lock.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py run.sh install.sh; do
+  for f in core.py multi.py platform_paths.py platform_lock.py version_info.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py run.sh install.sh; do
     if [[ -f "$DEST/$f" ]]; then cp -p "$DEST/$f" "$BACKUP/$f"; fi
   done
   printf 'Резервная копия прежнего кода: %s\n' "$BACKUP"
 fi
 
 # Preserve existing profiles and reports when upgrading.
-for name in core.py multi.py platform_paths.py platform_lock.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py release_preflight.py run.sh README.md LICENSE NOTICE; do
+for name in core.py multi.py platform_paths.py platform_lock.py version_info.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py release_preflight.py run.sh README.md LICENSE NOTICE; do
   install -m 0644 "$SOURCE/$name" "$DEST/$name"
 done
 install -m 0755 "$SOURCE/install.sh" "$DEST/install.sh"
+# Capture the Git revision of the installed source, not the process runtime.
+python3 "$SOURCE/version_info.py" --write "$DEST/build_info.json" --source "$SOURCE"
 # Ship public examples for tests and as migration references; never overwrite profiles.
 for sample in models.example.json settings.example.json services.example.json; do
   install -m 0644 "$SOURCE/$sample" "$DEST/$sample"
