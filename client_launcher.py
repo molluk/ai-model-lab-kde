@@ -173,6 +173,10 @@ def build_command(info, client, executable, version=None):
 
 
 def execute(client, alias):
+    if os.name == 'nt':
+        raise NotImplementedError(
+            'Запуск Pi/OpenCode из приложения на Windows ещё не реализован.'
+        )
     if client not in CLIENTS:
         raise ValueError('Доступно только: ' + ', '.join(CLIENTS))
     info = effective_instance(alias)

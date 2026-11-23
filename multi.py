@@ -1,12 +1,11 @@
 """Multiple independent local llama.cpp instances, strictly owned by this application.
 
 Each profile has its own localhost TCP port, CUDA_VISIBLE_DEVICES selection and PID
-identity. Never terminate a process that fails the /proc identity checks.
+identity. Fail closed if the platform-specific identity check fails.
 """
 from __future__ import annotations
 import contextlib
 import datetime as dt
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -17,6 +16,8 @@ import subprocess
 import time
 
 import core
+import platform_process
+from platform_lock import exclusive_lock
 
 INSTANCES = core.DATA / 'instances'
 _CHILDREN = {}  # Hold Popen handles until graceful shutdown; prevents zombies/warnings.
@@ -56,11 +57,8 @@ def locked():
     core.prepare()
     INSTANCES.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (INSTANCES / '.lock').open('a+b') as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
+        with exclusive_lock(lock):
             yield
-        finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def metadata(alias):
@@ -77,6 +75,8 @@ def record(alias, **updates):
 
 
 def owned(meta):
+    if os.name == 'nt':
+        return platform_process.is_owned(meta)
     try:
         pid = int(meta['pid'])
         if pid < 2 or int(meta.get('ticks', -1)) != core.start_ticks(pid):
@@ -176,20 +176,30 @@ def launch(alias):
             env['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
             env['CUDA_VISIBLE_DEVICES'] = gpu
         with log.open('ab', buffering=0) as stream:
+            options = ({'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}
+                       if os.name == 'nt' else {'start_new_session': True})
             child = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=stream,
-                                     stderr=subprocess.STDOUT, start_new_session=True, env=env)
-        ticks = None
+                                     stderr=subprocess.STDOUT, env=env, **options)
+        identity = None
         for _ in range(200):
             if child.poll() is not None:
                 break
-            ticks = core.start_ticks(child.pid)
-            if ticks is not None and 'llama-server' in core.cmdline(child.pid):
+            if os.name == 'nt':
+                try:
+                    identity = platform_process.capture(child.pid, cmd)
+                except RuntimeError:
+                    pass  # process may still be starting; fail closed below
+            else:
+                ticks = core.start_ticks(child.pid)
+                if ticks is not None and 'llama-server' in core.cmdline(child.pid):
+                    identity = {'pid': child.pid, 'ticks': ticks,
+                                'exe': str(Path(f'/proc/{child.pid}/exe').resolve())}
+            if identity:
                 break
             time.sleep(.02)
-        if child.poll() is not None or ticks is None:
-            raise RuntimeError(f'llama-server не запустился. Лог: {log}')
-        meta = {'alias': alias, 'pid': child.pid, 'ticks': ticks,
-                'exe': str(Path(f'/proc/{child.pid}/exe').resolve()),
+        if child.poll() is not None or identity is None:
+            raise RuntimeError(f'llama-server не запустился или не подтверждён. Лог: {log}')
+        meta = {**identity, 'alias': alias,
                 'gpu': gpu, 'port': port, 'context': int(p['context']),
                 'log': str(log), 'state': 'starting', 'started_at': dt.datetime.now().isoformat()}
         core.atomic_json(meta_path(alias), meta)
@@ -217,11 +227,15 @@ def stop(alias):
     if not state.get('managed') or not state.get('alive'):
         return f'{alias}: управляемый запущенный процесс не обнаружен'
     pid = int(state['pid'])
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        record(alias, state='stopped')
-        return f'{alias}: процесс уже завершился'
+    if os.name == 'nt':
+        if not platform_process.terminate_owned(state):
+            return f'{alias}: проверка принадлежности Windows-процесса не пройдена; остановка отменена'
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            record(alias, state='stopped')
+            return f'{alias}: процесс уже завершился'
     for _ in range(60):
         if not owned(state):
             child=_CHILDREN.pop(alias, None)

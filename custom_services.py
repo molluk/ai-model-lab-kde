@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 import core
 
-FILE = core.ROOT / 'services.json'
+FILE = core.USER_ROOT / 'services.json'
 STATE_DIR = core.DATA / 'custom_services'
 _CHILDREN = {}  # Preserve Popen handles until stopped; no zombie warnings in active GUI.
 RESERVED = {'llama', 'webui', 'office', 'comfy'}
@@ -160,6 +160,11 @@ def _expand_command(profile):
 
 
 def start(ident):
+    if os.name == 'nt':
+        raise NotImplementedError(
+            'Запуск пользовательских сервисов на Windows ещё не поддерживается: '
+            'требуется безопасная проверка владельца процесса.'
+        )
     p = profile_of(ident)
     if not p:
         raise ValueError('Unknown user service')

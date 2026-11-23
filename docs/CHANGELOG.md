@@ -5,9 +5,15 @@ features/changes in the corresponding ZIP, not claims about original commit date
 
 ## Unreleased — installed build identification
 - Show version and short installed Git commit hash at the lower-right edge of the main window; show full SHA and local-change marker on hover.
-- Generate the build manifest during Linux installation from the actual source checkout, without changing user profiles or depending on Git at GUI runtime.
-- Show `unknown` when commit provenance is unavailable (e.g., extracted source archive), never invent a SHA.
+- Generate the build manifest during installation from the actual source checkout, without changing user profiles or depending on Git at GUI runtime.
+- Explicitly show an unknown SHA when provenance is unavailable.
 - Add headless regression tests and RU/EN documentation.
+
+## Unreleased — experimental Windows bootstrap (feature branch)
+- Add a Windows onedir PyInstaller build script and Windows CI smoke/packaging workflow.
+- Keep Linux installed configuration layout unchanged; Windows user configuration and data are placed in LocalAppData.
+- Replace a POSIX-only import/lock with a platform-specific advisory lock module; include new modules in the Linux installer and preflight.
+- Document that safe Windows process identity/termination, model management and service integration are not yet implemented.
 
 ## Unreleased — standalone browser app windows
 - Add a third per-service opening mode: standalone Chromium-family `--app=URL` window without browser controls, alongside tabs and regular browser windows.

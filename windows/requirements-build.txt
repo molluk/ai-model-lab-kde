@@ -1,0 +1,4 @@
+# Windows-only build dependencies; external llama.cpp/Pi/OpenCode not bundled.
+PySide6>=6.7,<6.11
+pyinstaller>=6.13,<7
+psutil>=7.2.2,<9

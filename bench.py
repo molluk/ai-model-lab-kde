@@ -265,6 +265,8 @@ def main():
     p.add_argument('--output-tokens',type=int,default=256)
     p.add_argument('--target-tokens',type=int,default=8192)
     args=p.parse_args()
+    if os.name == 'nt':
+        p.error('Бенчмарки на Windows пока отключены до реализации безопасного управления дочерними процессами')
     if not (1024<=args.port<=65535 and 10<=args.timeout<=7200 and 1<=args.budget<=200 and 32<=args.output_tokens<=2048):
         p.error('Недопустимые бюджет, тайм-аут или длина ответа')
     core.prepare()

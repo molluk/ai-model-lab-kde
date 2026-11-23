@@ -21,5 +21,11 @@ settings.json
 
 # User-defined executable service profiles (local paths/credentials)
 services.json
-# Generated only by install/build steps; never commit a locally produced SHA.
+# Generated build provenance.
 build_info.json
+
+# Build outputs, Windows packaging and local virtual environments.
+/dist/
+/build/
+*.spec
+.venv-win/

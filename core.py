@@ -14,17 +14,22 @@ import subprocess
 import time
 import urllib.request
 
+import platform_paths
+
 ROOT = Path(__file__).resolve().parent
 HOME = Path.home()
-DATA = ROOT / 'data'
+# Preserve the existing Linux layout; Windows keeps all mutable data out of
+# bundled code and Program Files.
+USER_ROOT = platform_paths.user_root(ROOT)
+DATA = USER_ROOT / 'data'
 LOGS = DATA / 'logs'
 REPORTS = DATA / 'reports'
-MODELS = ROOT / 'models.json'
-SETTINGS = ROOT / 'settings.json'
+MODELS = USER_ROOT / 'models.json'
+SETTINGS = USER_ROOT / 'settings.json'
 
 
 def prepare():
-    for path in (DATA, LOGS, REPORTS):
+    for path in (USER_ROOT, DATA, LOGS, REPORTS):
         path.mkdir(parents=True, exist_ok=True)
         try: path.chmod(0o700)
         except OSError: pass
@@ -197,6 +202,11 @@ def verified(name):
 
 
 def spawn(name, args, cwd=None, **extra):
+    if os.name == 'nt':
+        raise NotImplementedError(
+            'Запуск управляемых сервисов на Windows временно отключён: '
+            'без проверки владельца и жизненного цикла процессов это небезопасно.'
+        )
     prepare()
     log = LOGS / f'{name}_{dt.datetime.now():%Y%m%d_%H%M%S}.log'
     with log.open('ab', buffering=0) as out:
