@@ -96,6 +96,18 @@ def preview(root: Path, *, selected=CATEGORIES, protected=()) -> dict:
     return output
 
 
+def _symlink_component(root: Path, candidate: Path) -> bool:
+    """Refuse a path if any component below app root was replaced by a link."""
+    pointer = candidate
+    while pointer != root:
+        if pointer.is_symlink():
+            return True
+        if pointer == pointer.parent:
+            return True
+        pointer = pointer.parent
+    return False
+
+
 def apply(plan: dict, *, protected=()) -> dict:
     """Remove *only* files identified in a prior preview; never delete a new file."""
     root = _safe_base(Path(plan["root"]))
@@ -112,7 +124,8 @@ def apply(plan: dict, *, protected=()) -> dict:
             path = root / relative
             if not any(path.is_relative_to(parent) for parent in allowed_roots):
                 raise ValueError("Файл очистки вне разрешённого каталога")
-            if ((category != "backups" and path.name in CONFIG_NAMES)
+            if (_symlink_component(root, path)
+                    or (category != "backups" and path.name in CONFIG_NAMES)
                     or str(path.resolve()) in protected_paths):
                 skipped += 1
                 continue
@@ -137,7 +150,7 @@ def apply(plan: dict, *, protected=()) -> dict:
                        for parent in allowed_roots):
                 raise ValueError("Каталог очистки вне разрешённой области")
             try:
-                if not directory.is_symlink():
+                if not _symlink_component(root, directory):
                     directory.rmdir()  # only empty folders, never recursive delete
             except OSError:
                 pass
