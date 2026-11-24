@@ -117,6 +117,22 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(len(result["weights"]), 1)
         self.assertIn(str(link), result["skipped_symlinks"])
 
+    def test_direct_root_model_is_scanned(self):
+        direct = self.write(self.root, "top-level-Q4_K_M.gguf")
+        report = model_inventory.scan_weights(self.root)
+        self.assertIn(str(direct), report["by_path"])
+        self.assertEqual(report["by_path"][str(direct)]["root"], "AI root")
+
+    def test_split_parts_are_not_reported_as_independent_orphans(self):
+        first = self.write(self.uncensored / "shards",
+                           "model-Q5_K_M-00001-of-00002.gguf")
+        self.write(self.uncensored / "shards",
+                   "model-Q5_K_M-00002-of-00002.gguf")
+        inv = model_inventory.scan_weights(self.root)
+        orphan = model_inventory.analyze_profiles(
+            {"model_root": str(self.censored), "models": []}, inv)["unassigned_gguf"]
+        self.assertEqual(orphan, [str(first)])
+
     def test_long_invalid_alias_detected(self):
         file = self.write(self.censored / "X", "x.gguf")
         data = {"model_root": str(self.censored),
