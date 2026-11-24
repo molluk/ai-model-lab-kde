@@ -2014,6 +2014,12 @@ class Window(QMainWindow):
         preview.setReadOnly(True)
         preview.setPlainText('\n'.join(report_lines))
         layout.addWidget(preview, 1)
+        duplicate_box = QCheckBox(T(
+            'Удалить повторные профили с одинаковым GGUF (файлы не затрагивать)'
+        ))
+        duplicate_box.setEnabled(bool(duplicate))
+        duplicate_box.setChecked(False)
+        layout.addWidget(duplicate_box)
         missing_box = QCheckBox(T(
             'Также удалить профили с отсутствующим GGUF (файлы моделей не затрагивать)'
         ))
@@ -2034,7 +2040,8 @@ class Window(QMainWindow):
             if core.config() != actual:
                 raise RuntimeError(T('models.json изменён после анализа; запусти проверку снова.'))
             data = model_maintenance.apply_selection(
-                plan, remove_missing=missing_box.isChecked())
+                plan, remove_missing=missing_box.isChecked(),
+                remove_duplicates=duplicate_box.isChecked())
             if data == actual:
                 return
             backup = model_catalog.save_config(core.MODELS, data)
