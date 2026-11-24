@@ -12,6 +12,7 @@
   "client_workspace": "~",
   "logs_retention_days": 30,
   "reports_retention_days": 90,
+  "auto_cache_cleanup_hours": 0,
   "browser_open_modes": {
     "webui": "tab",
     "office": "tab",
