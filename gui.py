@@ -40,6 +40,7 @@ import model_catalog
 import model_maintenance
 import model_folders
 import artifact_cleanup
+import cache_scheduler
 import offline_client
 import client_launcher
 import custom_services
@@ -330,6 +331,7 @@ class Window(QMainWindow):
         self.auto_timer.timeout.connect(self.auto_save_pending)
         self.last_log_path = None
         self.last_log_text = ''
+        self.cache_job = None
 
         self.setWindowTitle(T('AI Model Lab — KDE · локальная лаборатория'))
         self.resize(1320, 900)
@@ -423,6 +425,11 @@ class Window(QMainWindow):
         self.apply_retention_cleanup(startup=True)
         self.refresh_reports()
         self.refresh_status()
+        self.cache_timer = QTimer(self)
+        self.cache_timer.setInterval(60_000)
+        self.cache_timer.timeout.connect(self.check_auto_cache_cleanup)
+        self.cache_timer.start()
+        QTimer.singleShot(100, self.check_auto_cache_cleanup)
 
 
     def switch_language(self, _index):
@@ -462,7 +469,7 @@ class Window(QMainWindow):
         new_window.show()
         self.exit_requested = True
         # Closing a Qt window normally hides it without destroying its timers.
-        for timer_name in ('timer', 'log_timer', 'auto_timer', 'column_timer'):
+        for timer_name in ('timer', 'log_timer', 'auto_timer', 'column_timer', 'cache_timer'):
             timer = getattr(self, timer_name, None)
             if timer is not None:
                 timer.stop()
@@ -629,6 +636,85 @@ class Window(QMainWindow):
                 chosen_plan, protected=self.protected_log_paths()),
                 ensure_ascii=False)
         self.async_call(T('Очистка данных приложения'), clear, after=finished)
+
+    def refresh_cache_schedule_label(self):
+        if not hasattr(self, 'cache_auto_status'):
+            return
+        try:
+            hours = int(self.settings_data.get(cache_scheduler.INTERVAL_KEY, 0) or 0)
+            self.cache_auto_status.setText(
+                cache_scheduler.next_run_label(core.ROOT, hours) +
+                T('\nТаймер работает только при открытом AI Model Lab (в том числе в трее).'))
+        except Exception as exc:
+            self.cache_auto_status.setText(T('Расписание очистки недоступно: ') + str(exc))
+
+    def cache_cleanup_busy(self):
+        """Never purge temporary app files while work/tests or models are active."""
+        if self.exit_requested or self.model_action_busy:
+            return True
+        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
+            return True
+        if any(job.isRunning() for job in self.jobs):
+            return True
+        if self.shutdown_job and self.shutdown_job.isRunning():
+            return True
+        try:
+            return bool(multi.active_instances())
+        except Exception:
+            return True  # Fail closed if process ownership cannot be inspected.
+
+    def check_auto_cache_cleanup(self):
+        """One lightweight check per minute; the deletion itself runs in a worker."""
+        if self.cache_job is not None:
+            return
+        try:
+            hours = cache_scheduler.validate_hours(
+                int(self.settings_data.get(cache_scheduler.INTERVAL_KEY, 0) or 0))
+            if hours == 0:
+                self.refresh_cache_schedule_label()
+                return
+            state = cache_scheduler.status(core.ROOT, hours)
+            if state['status'] == 'uninitialized':
+                cache_scheduler.configure(core.ROOT, hours)
+            elif state['status'] == 'due' and not self.cache_cleanup_busy():
+                job = Worker(
+                    lambda: json.dumps(cache_scheduler.run_due(
+                        core.ROOT, hours), ensure_ascii=False), self)
+                self.cache_job = job
+                self.jobs.append(job)
+
+                def on_done(text):
+                    try:
+                        report = json.loads(text)
+                        if report.get('status') == 'cleaned':
+                            self.set_message(T(
+                                f"Автоочистка кэша: {report['count']} файлов, "
+                                f"{artifact_cleanup.pretty_bytes(report['bytes'])}"))
+                        elif report.get('status') == 'error':
+                            self.set_message(T('Ошибка автоочистки кэша: ') +
+                                             str(report.get('error', '')))
+                    except (TypeError, ValueError):
+                        self.set_message(T('Не удалось прочитать результат автоочистки'))
+                    self.refresh_cache_schedule_label()
+
+                def on_fail(message):
+                    self.set_message(T('Ошибка автоочистки кэша: ') + message)
+                    self.refresh_cache_schedule_label()
+
+                def on_finished():
+                    if job in self.jobs:
+                        self.jobs.remove(job)
+                    self.cache_job = None
+                    self.refresh_cache_schedule_label()
+
+                job.done.connect(on_done)
+                job.failed.connect(on_fail)
+                job.finished.connect(on_finished)
+                job.start()
+            self.refresh_cache_schedule_label()
+        except Exception as exc:
+            self.set_message(T('Ошибка таймера очистки: ') + str(exc))
+            self.refresh_cache_schedule_label()
 
     def clear_all_reports(self):
         if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
@@ -2275,6 +2361,29 @@ class Window(QMainWindow):
         grid.addWidget(
             slim_btn(T('🧹 Кэш / логи / резервные копии'), self.open_storage_cleanup),
             cleanup_row + 1, 0, 1, 4)
+
+        auto_row = cleanup_row + 2
+        self.cache_auto_enabled = QCheckBox(T('Автоматически очищать кэш каждые'))
+        interval = int(self.settings_data.get(cache_scheduler.INTERVAL_KEY, 0) or 0)
+        if not 0 <= interval <= cache_scheduler.MAX_HOURS:
+            interval = 0
+        self.cache_auto_enabled.setChecked(interval > 0)
+        self.cache_auto_hours = QSpinBox()
+        self.cache_auto_hours.setRange(cache_scheduler.MIN_HOURS,
+                                       cache_scheduler.MAX_HOURS)
+        self.cache_auto_hours.setValue(interval or 24)
+        self.cache_auto_hours.setSuffix(T(' ч'))
+        self.cache_auto_hours.setEnabled(interval > 0)
+        self.cache_auto_enabled.toggled.connect(self.cache_auto_hours.setEnabled)
+        grid.addWidget(self.cache_auto_enabled, auto_row, 0, 1, 2)
+        grid.addWidget(self.cache_auto_hours, auto_row, 2)
+        grid.addWidget(QLabel(T('Сохрани настройки для применения')), auto_row, 3)
+        self.cache_auto_status = QLabel(T(
+            'Очистка работает при открытом приложении, включая трей; '
+            'после закрытия — при следующем запуске.'))
+        self.cache_auto_status.setWordWrap(True)
+        self.cache_auto_status.setObjectName('Subheader')
+        grid.addWidget(self.cache_auto_status, auto_row + 1, 0, 1, 4)
         l.addWidget(common)
 
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -2841,8 +2950,19 @@ class Window(QMainWindow):
             data['logs_retention_days'] = int(self.logs_retention.value())
         if hasattr(self, 'reports_retention'):
             data['reports_retention_days'] = int(self.reports_retention.value())
+        old_interval = int(data.get(cache_scheduler.INTERVAL_KEY, 0) or 0)
+        if hasattr(self, 'cache_auto_enabled'):
+            hours = int(self.cache_auto_hours.value()) if self.cache_auto_enabled.isChecked() else 0
+            data[cache_scheduler.INTERVAL_KEY] = cache_scheduler.validate_hours(hours)
         core.atomic_json(core.SETTINGS, data)
         self.settings_data = data
+        try:
+            cache_scheduler.configure(core.ROOT, int(data.get(cache_scheduler.INTERVAL_KEY, 0)),
+                                     reset=(old_interval != data.get(cache_scheduler.INTERVAL_KEY, 0)))
+        except Exception as exc:
+            QMessageBox.warning(self, T('Расписание автоочистки'),
+                                T('Настройки сохранены, но не удалось записать расписание: ') + str(exc))
+        self.refresh_cache_schedule_label()
         self.apply_retention_cleanup(startup=True)
         self.refresh_reports()
         QMessageBox.information(self, T('Настройки'), T('Настройки программы сохранены. Профили сохраняются отдельно.'))
