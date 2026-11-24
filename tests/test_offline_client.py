@@ -77,6 +77,37 @@ class OfflineTests(unittest.TestCase):
                 tcp.shutdown()
                 th.join(timeout=3)
 
+    def test_both_proxy_sides_reach_only_the_selected_local_server(self):
+        with EchoServer(("127.0.0.1", 0), Echo) as model_server:
+            t1 = threading.Thread(target=model_server.serve_forever, daemon=True)
+            t1.start()
+            try:
+                with tempfile.TemporaryDirectory() as td:
+                    path = Path(td) / "socket"
+                    with offline_client.host_bridge(path, model_server.server_address[1]) as host:
+                        t2 = threading.Thread(target=host.serve_forever, daemon=True)
+                        t2.start()
+                        try:
+                            # The same bridge can run in normal loopback for
+                            # testing; bubblewrap creates the separate namespace.
+                            with offline_client.sandbox_bridge(path, 0) as guest:
+                                t3 = threading.Thread(target=guest.serve_forever, daemon=True)
+                                t3.start()
+                                try:
+                                    with socket.create_connection(
+                                            guest.server_address, timeout=3) as connection:
+                                        connection.sendall(b"loopback")
+                                        self.assertEqual(connection.recv(1024), b"LOOPBACK")
+                                finally:
+                                    guest.shutdown()
+                                    t3.join(timeout=3)
+                        finally:
+                            host.shutdown()
+                            t2.join(timeout=3)
+            finally:
+                model_server.shutdown()
+                t1.join(timeout=3)
+
     def test_run_isolated_does_not_exec_unrestricted_client(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
