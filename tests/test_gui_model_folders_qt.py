@@ -96,6 +96,18 @@ class QtModelFoldersTest(unittest.TestCase):
                     # Numerical sorting is per-folder, and both model rows remain.
                     window.tree.sortItems(2, Qt.SortOrder.AscendingOrder)
                     self.assertEqual(len(list(window.iter_model_items())), 2)
+                    # Exercise the actual filter popup's search and checked values.
+                    popup = gui.ColumnFilterPopup(
+                        "Модель", ["Blend", "Qwen"], None, window)
+                    popup.show()
+                    app.processEvents()
+                    popup.search.setText("qwen")
+                    self.assertTrue(popup.checks["Blend"].isHidden())
+                    self.assertFalse(popup.checks["Qwen"].isHidden())
+                    popup.checks["Blend"].setChecked(False)
+                    self.assertEqual(popup.selected_values(), {"Qwen"})
+                    popup.close()
+
                     # Header-popup filtering, not seven permanent text fields.
                     for col, value in enumerate(
                             ["[Uncensored] Qwen3.8", "Не запущена", "32K", "авто",
