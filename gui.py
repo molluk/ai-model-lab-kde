@@ -36,6 +36,7 @@ except ImportError:
 
 import core
 import multi
+import model_catalog
 import client_launcher
 import custom_services
 import shutdown_manager
@@ -825,6 +826,7 @@ class Window(QMainWindow):
         actions.addWidget(slim_btn(T('⧉ Клонировать'), self.clone_selected_model))
         actions.addWidget(slim_btn(T('－ Удалить'), self.delete_selected_model, danger=True))
         actions.addWidget(slim_btn(T('✎ Изменить'), self.open_selected_in_editor))
+        actions.addWidget(slim_btn(T('🔎 Найти GGUF'), self.import_local_models))
         actions.addStretch()
         left_layout.addLayout(actions)
         self.status_label = QLabel(T('Статус: ожидание')); self.status_label.setObjectName('Subheader')
@@ -1926,6 +1928,59 @@ class Window(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self,T('Ошибка профиля'),str(exc))
             return False
+
+    def import_local_models(self):
+        """Preview and import both Censored/Uncensored folders without touching GGUF."""
+        if self.editor_dirty and not self.confirm_discard_or_save():
+            return
+        try:
+            plan = model_catalog.plan_import(self.cfg)
+        except Exception as exc:
+            QMessageBox.warning(self, T('Поиск GGUF'), str(exc))
+            return
+        if not plan['found']:
+            QMessageBox.information(
+                self, T('Поиск GGUF'),
+                T('GGUF не обнаружены. Проверь, что диски смонтированы и каталоги доступны.') +
+                ('\n' + '\n'.join(plan['missing_roots']) if plan['missing_roots'] else ''))
+            return
+        new = plan['added']
+        if not new:
+            QMessageBox.information(
+                self, T('Поиск GGUF'),
+                T(f"Найдено {plan['found']} GGUF. Новых профилей нет, ничего не изменено."))
+            return
+        preview = '\n'.join('• ' + p['name'] + f" (порт {p['port']})" for p in new[:14])
+        if len(new) > 14:
+            preview += f"\n… и ещё {len(new) - 14}"
+        if plan['warnings']:
+            preview += '\n\n' + T('Требует проверки:') + '\n' + '\n'.join(plan['warnings'][:5])
+        if plan['missing_roots']:
+            preview += '\n\n' + T('Каталоги не доступны:') + '\n' + '\n'.join(plan['missing_roots'])
+        answer = QMessageBox.question(
+            self, T('Импорт локальных GGUF'),
+            T(f"Обнаружено GGUF: {plan['found']}\nУже учтено: {len(plan['existing'])}\n"
+              f"Новых профилей: {len(new)}\n\n")
+            + preview + '\n\n' +
+            T('Существующие профили сохраняются. GGUF не изменяются.\n'
+              'Новые модели не запускаются автоматически.\n\nДобавить профили?'),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            backup = model_catalog.save_config(core.MODELS, plan['config'])
+            self.cfg = plan['config']
+            self.editor_dirty = False
+            self.editor_current_alias = None
+            self.populate_settings_tree()
+            self.populate_model_tree()
+            self.set_message(T(f'Добавлено {len(new)} профилей GGUF; резервная копия: {backup or "не нужна"}'))
+            QMessageBox.information(
+                self, T('Импорт GGUF'),
+                T(f'Добавлено {len(new)} профилей. Для запуска проверь контекст, GPU и mmproj.'))
+        except Exception as exc:
+            QMessageBox.warning(self, T('Ошибка сохранения моделей'), str(exc))
 
     def next_port(self):
         used={int(p.get('port',8080)) for p in self.cfg.get('models',[])}
