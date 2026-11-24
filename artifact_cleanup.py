@@ -84,7 +84,7 @@ def preview(root: Path, *, selected=CATEGORIES, protected=()) -> dict:
                 if not file.resolve().is_relative_to(parent):
                     continue
                 entries.append((str(file.relative_to(root)), meta.st_dev,
-                                meta.st_ino, meta.st_size))
+                                meta.st_ino, meta.st_size, meta.st_mtime_ns))
                 bytes_total += meta.st_size
             folders.extend(str(p.relative_to(root)) for p in scanned_dirs)
         output["categories"][category] = {
@@ -108,7 +108,7 @@ def apply(plan: dict, *, protected=()) -> dict:
         removed = 0
         size = 0
         skipped = 0
-        for relative, dev, ino, original_size in info["entries"]:
+        for relative, dev, ino, original_size, modified_ns in info["entries"]:
             path = root / relative
             if not any(path.is_relative_to(parent) for parent in allowed_roots):
                 raise ValueError("Файл очистки вне разрешённого каталога")
@@ -119,7 +119,9 @@ def apply(plan: dict, *, protected=()) -> dict:
             try:
                 meta = path.lstat()
                 if (not stat.S_ISREG(meta.st_mode) or meta.st_dev != dev
-                        or meta.st_ino != ino or not path.resolve().is_relative_to(root)):
+                        or meta.st_ino != ino or meta.st_size != original_size
+                        or meta.st_mtime_ns != modified_ns
+                        or not path.resolve().is_relative_to(root)):
                     skipped += 1
                     continue
                 path.unlink()
