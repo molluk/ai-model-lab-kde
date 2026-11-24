@@ -61,8 +61,8 @@
 ## Проверка локальных моделей
 
 Новый сценарий `model_inventory.py` выполняет только чтение:
-просматривает GGUF и safetensors в
-`/mnt/Games/AI/Censored` и `/mnt/Games/AI/Uncensored`, включая
+просматривает GGUF и safetensors непосредственно в `/mnt/Games/AI`, а также
+в `/mnt/Games/AI/Censored` и `/mnt/Games/AI/Uncensored`, включая
 вложенные каталоги, сопоставляет веса с `models.json`, отмечает
 неразрешённые пути и шаблоны, один GGUF на несколько профилей,
 дубли портов, подозрительные заголовки GGUF, пропущенные части
