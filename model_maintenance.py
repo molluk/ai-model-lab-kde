@@ -160,6 +160,26 @@ def _resolve(profile, config, roots, files):
     return None, "ambiguous"
 
 
+def _fix_mmproj(profile, path, roots):
+    """Replace a broken/default projector only if exactly one local match exists."""
+    if _kind(profile, path) != "vision":
+        return profile, None
+    current = str(profile.get("mmproj") or "").strip()
+    if current and current != "replace-with-mmproj.gguf":
+        candidate = Path(current).expanduser()
+        if not candidate.is_absolute():
+            candidate = path.parent / candidate
+        if candidate.is_file():
+            return profile, None
+    root = next((r for r in roots if path.is_relative_to(r)), None)
+    projector = model_catalog._projector_for(path, root) if root else None
+    if projector:
+        changed = copy.deepcopy(profile)
+        changed["mmproj"] = str(projector)
+        return changed, None
+    return profile, "Нет однозначного mmproj; проверь проектор вручную"
+
+
 def _tuned_preset(profile, path, hardware):
     updated = copy.deepcopy(profile)
     size = _size_gib(path)
@@ -226,6 +246,9 @@ def plan_maintenance(config, *, roots=None, hardware=None):
             kept.append(profile)
             continue
         before = copy.deepcopy(profile)
+        profile, projector_error = _fix_mmproj(profile, path, roots)
+        if projector_error:
+            warnings.append(f"{alias}: {projector_error}")
         if str(profile.get("purpose", "")).startswith("Импортирован из ") or \
                 profile.get("purpose") in LEGACY_PURPOSES:
             profile["purpose"] = _description(profile, path)
@@ -240,8 +263,7 @@ def plan_maintenance(config, *, roots=None, hardware=None):
             changes.append({"id": alias, "before": before, "after": copy.deepcopy(profile)})
         kept.append(profile)
 
-    # Duplicates were deliberately excluded; explicit confirmation required to
-    # commit the plan. Missing paths are only proposed, never removed silently.
+    # Duplicates and missing profiles remain until explicitly approved for removal.
     updated["models"] = kept
     return {"config": updated, "changes": changes, "suggested": suggestions,
             "warnings": warnings, "statuses": statuses,
