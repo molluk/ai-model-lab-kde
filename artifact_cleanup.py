@@ -73,8 +73,12 @@ def preview(root: Path, *, selected=CATEGORIES, protected=()) -> dict:
         folders = []
         bytes_total = 0
         for parent in targets(root)[category]:
-            for file, meta in _tree_files(parent)[0]:
-                if file.name in CONFIG_NAMES or str(file.resolve()) in protected_paths:
+            scanned_files, scanned_dirs = _tree_files(parent)
+            for file, meta in scanned_files:
+                # Configs are never within the selected active storage targets.
+                # In backups they *are* snapshots and can be intentionally purged.
+                if ((category != "backups" and file.name in CONFIG_NAMES)
+                        or str(file.resolve()) in protected_paths):
                     continue
                 # Recheck containment. A path through a symlink is never valid.
                 if not file.resolve().is_relative_to(parent):
@@ -82,8 +86,7 @@ def preview(root: Path, *, selected=CATEGORIES, protected=()) -> dict:
                 entries.append((str(file.relative_to(root)), meta.st_dev,
                                 meta.st_ino, meta.st_size))
                 bytes_total += meta.st_size
-            folders.extend(str(p.relative_to(root))
-                           for p in _tree_files(parent)[1])
+            folders.extend(str(p.relative_to(root)) for p in scanned_dirs)
         output["categories"][category] = {
             "count": len(entries),
             "bytes": bytes_total,
@@ -109,7 +112,8 @@ def apply(plan: dict, *, protected=()) -> dict:
             path = root / relative
             if not any(path.is_relative_to(parent) for parent in allowed_roots):
                 raise ValueError("Файл очистки вне разрешённого каталога")
-            if path.name in CONFIG_NAMES or str(path.resolve()) in protected_paths:
+            if ((category != "backups" and path.name in CONFIG_NAMES)
+                    or str(path.resolve()) in protected_paths):
                 skipped += 1
                 continue
             try:
