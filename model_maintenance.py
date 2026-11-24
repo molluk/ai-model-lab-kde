@@ -207,6 +207,8 @@ def plan_maintenance(config, *, roots=None, hardware=None):
         if path and path in owner:
             suggestions.append({"id": alias, "reason":
                                 f"Дублирует GGUF профиля {owner[path]}", "type": "duplicate"})
+            # Same GGUF can intentionally have different contexts and clients.
+            kept.append(profile)
             continue
         if path:
             owner[path] = alias
@@ -246,13 +248,16 @@ def plan_maintenance(config, *, roots=None, hardware=None):
             "found_files": len(files), "hardware": hw}
 
 
-def apply_selection(report, *, remove_missing=False):
-    """Explicitly select stale-profile deletion; duplicate profiles already
-    appear in the preview and will be removed if the plan is applied."""
+def apply_selection(report, *, remove_missing=False, remove_duplicates=False):
+    """Remove candidates only after an explicit user selection."""
     config = copy.deepcopy(report["config"])
+    types = set()
     if remove_missing:
-        ids = {item["id"] for item in report["suggested"] if item["type"] == "missing"}
-        config["models"] = [p for p in config["models"] if p.get("id") not in ids]
+        types.add("missing")
+    if remove_duplicates:
+        types.add("duplicate")
+    ids = {item["id"] for item in report["suggested"] if item["type"] in types}
+    config["models"] = [p for p in config["models"] if p.get("id") not in ids]
     return config
 
 
@@ -262,10 +267,12 @@ def main(argv=None):
     parser.add_argument("--root", action="append")
     parser.add_argument("--apply", action="store_true", help="save reviewed changes with backup")
     parser.add_argument("--remove-missing", action="store_true",
-                        help="also remove profiles whose GGUF is confirmed missing (requires --apply)")
+                        help="remove profiles whose GGUF is confirmed missing (requires --apply)")
+    parser.add_argument("--remove-duplicates", action="store_true",
+                        help="remove profiles pointing to the same GGUF (requires --apply)")
     args = parser.parse_args(argv)
-    if args.remove_missing and not args.apply:
-        parser.error("--remove-missing requires --apply")
+    if (args.remove_missing or args.remove_duplicates) and not args.apply:
+        parser.error("--remove-missing/--remove-duplicates require --apply")
     config = json.loads(args.config.read_text(encoding="utf-8"))
     report = plan_maintenance(config, roots=args.root)
     print(f"GGUF: {report['found_files']} | изменяемых: {len(report['changes'])} | "
@@ -282,7 +289,8 @@ def main(argv=None):
     if not args.apply:
         print("Dry-run: ни одного файла не изменено. Для записи --apply.")
         return 0
-    target = apply_selection(report, remove_missing=args.remove_missing)
+    target = apply_selection(report, remove_missing=args.remove_missing,
+                             remove_duplicates=args.remove_duplicates)
     if target == config:
         print("Нет изменений")
         return 0
