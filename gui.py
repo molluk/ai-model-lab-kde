@@ -16,7 +16,7 @@ try:
         QHBoxLayout, QGridLayout, QTabWidget, QTreeWidget, QTreeWidgetItem, QGroupBox,
         QComboBox, QLineEdit, QSpinBox, QFileDialog, QMessageBox, QTextEdit, QSplitter,
         QTableWidget, QTableWidgetItem, QHeaderView, QFormLayout, QAbstractItemView,
-        QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle, QToolButton
+        QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle, QToolButton, QInputDialog
     )
     from PySide6.QtCore import QUrl
 except ImportError:
@@ -38,6 +38,7 @@ import core
 import multi
 import model_catalog
 import model_maintenance
+import model_folders
 import client_launcher
 import custom_services
 import shutdown_manager
@@ -164,6 +165,22 @@ class Sparkline(QWidget):
         p.setPen(QPen(QColor('#69b6ff'), 2))
         for (x1, y1), (x2, y2) in zip(points, points[1:]):
             p.drawLine(x1, y1, x2, y2)
+
+
+
+class ModelTreeItem(QTreeWidgetItem):
+    """Numeric sorting for Context, Port and PID; case-insensitive elsewhere."""
+    def __lt__(self, other):
+        tree = self.treeWidget()
+        column = tree.sortColumn() if tree else 0
+        if column in (2, 4, 5):
+            one = self.data(column, Qt.ItemDataRole.UserRole)
+            two = other.data(column, Qt.ItemDataRole.UserRole)
+            try:
+                return int(one) < int(two)
+            except (ValueError, TypeError):
+                pass
+        return self.text(column).casefold() < other.text(column).casefold()
 
 
 class Window(QMainWindow):
@@ -814,6 +831,7 @@ class Window(QMainWindow):
         self.tree = QTreeWidget(); self.tree.setColumnCount(7)
         self.tree.setHeaderLabels([T('Модель'), T('Статус'), T('Контекст'), 'GPU', T('Порт'), 'PID', T('Назначение')])
         self.tree.setRootIsDecorated(False)
+        self.tree.setToolTip(T('Щёлкни по заголовку столбца для сортировки по возрастанию/убыванию.'))
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setAllColumnsShowFocus(True)
@@ -836,6 +854,41 @@ class Window(QMainWindow):
         self.tree.currentItemChanged.connect(self.on_model_selected)
         self.tree.setUniformRowHeights(True)
         self.tree.setMinimumHeight(215)
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(QLabel(T('Папка:')))
+        self.folder_selector = QComboBox()
+        self.folder_selector.setMinimumWidth(145)
+        self.folder_selector.setToolTip(T('Виртуальные папки: GGUF остаются на своих местах'))
+        self.folder_selector.currentIndexChanged.connect(self.apply_model_filters)
+        folder_row.addWidget(self.folder_selector, 1)
+        folder_row.addWidget(slim_btn(T('＋ Папка'), self.create_model_folder))
+        folder_row.addWidget(slim_btn(T('↳ Переместить'), self.move_selected_model_folder))
+        left_layout.addLayout(folder_row)
+
+        folder_actions = QHBoxLayout()
+        folder_actions.addWidget(slim_btn(T('✎ Переименовать папку'), self.rename_model_folder))
+        folder_actions.addWidget(slim_btn(T('－ Удалить папку'), self.delete_model_folder))
+        folder_actions.addStretch()
+        left_layout.addLayout(folder_actions)
+
+        left_layout.addWidget(QLabel(T('Фильтры по столбцам (совмещаются):')))
+        self.model_filter_edits = []
+        filters_layout = QGridLayout()
+        filters_layout.setSpacing(5)
+        columns = [T('Модель'), T('Статус'), T('Контекст'), 'GPU',
+                   T('Порт'), 'PID', T('Назначение')]
+        for col, name in enumerate(columns):
+            field = QLineEdit()
+            field.setPlaceholderText(name + '…')
+            field.setClearButtonEnabled(True)
+            field.setToolTip(T(f'Поиск по столбцу: {name}'))
+            field.textChanged.connect(self.apply_model_filters)
+            self.model_filter_edits.append(field)
+            filters_layout.addWidget(field, col // 4, col % 4)
+        left_layout.addLayout(filters_layout)
+        self.visible_models_label = QLabel('')
+        self.visible_models_label.setObjectName('Subheader')
+        left_layout.addWidget(self.visible_models_label)
         left_layout.addWidget(self.tree, 3)
         actions = QHBoxLayout()
         actions.setSpacing(6)
@@ -911,6 +964,8 @@ class Window(QMainWindow):
         self.column_timer = QTimer(self); self.column_timer.setSingleShot(True)
         self.column_timer.timeout.connect(self.persist_columns)
         self.populate_model_tree()
+        self.tree.setSortingEnabled(True)
+        self.tree.sortItems(0, Qt.SortOrder.AscendingOrder)
         if self.tree.topLevelItemCount(): self.tree.setCurrentItem(self.tree.topLevelItem(0))
         return w
 
@@ -924,16 +979,74 @@ class Window(QMainWindow):
         core.atomic_json(core.SETTINGS, settings)
         self.settings_data = settings
 
+    def refresh_model_folder_selector(self):
+        """Rebuild virtual-folder filter without changing saved config or GGUF."""
+        selected = self.folder_selector.currentData()
+        counts = model_folders.folder_counts(self.cfg)
+        self.folder_selector.blockSignals(True)
+        self.folder_selector.clear()
+        self.folder_selector.addItem(T(f"Все папки ({len(self.cfg.get('models', []))})"),
+                                     model_folders.ALL_FOLDERS)
+        self.folder_selector.addItem(
+            T(f"Без папки ({counts.get(model_folders.UNFILED, 0)})"),
+            model_folders.UNFILED)
+        for name in model_folders.list_folders(self.cfg):
+            self.folder_selector.addItem(f"{name} ({counts.get(name, 0)})", name)
+        index = self.folder_selector.findData(selected)
+        self.folder_selector.setCurrentIndex(index if index >= 0 else 0)
+        self.folder_selector.blockSignals(False)
+
+    def apply_model_filters(self, *_):
+        if not hasattr(self, 'tree') or not hasattr(self, 'model_filter_edits'):
+            return
+        selected_folder = self.folder_selector.currentData()
+        filters = [line.text() for line in self.model_filter_edits]
+        shown = 0
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            alias = item.data(0, Qt.ItemDataRole.UserRole)
+            profile = self.profile_lookup(alias) or {}
+            folder = model_folders.effective_folder(profile, self.cfg)
+            row_values = [item.text(c) for c in range(self.tree.columnCount())]
+            visible = model_folders.matches_row(folder, selected_folder,
+                                                 row_values, filters)
+            item.setHidden(not visible)
+            shown += int(visible)
+        if hasattr(self, 'visible_models_label'):
+            total = self.tree.topLevelItemCount()
+            self.visible_models_label.setText(T(f'Показано моделей: {shown} из {total}'))
+        selected = self.tree.currentItem()
+        if selected is None or selected.isHidden():
+            first = next((self.tree.topLevelItem(i)
+                          for i in range(self.tree.topLevelItemCount())
+                          if not self.tree.topLevelItem(i).isHidden()), None)
+            self.tree.setCurrentItem(first)
+
     def populate_model_tree(self):
         selected = self.selected_alias() if self.tree.topLevelItemCount() else None
+        was_sorting = self.tree.isSortingEnabled()
+        sort_column = self.tree.sortColumn()
+        sort_order = self.tree.header().sortIndicatorOrder()
         self._tree_loading = True
+        self.tree.setSortingEnabled(False)
         self.tree.clear()
         for p in self.cfg.get('models', []):
-            it = QTreeWidgetItem([p.get('name', p['id']), '—', f"{int(p['context']) // 1024}K", '—', '—', '—', T(p.get('purpose', '—'))])
+            context = int(p.get('context', 32768) or 32768)
+            it = ModelTreeItem([p.get('name', p['id']), '—',
+                                f"{context // 1024}K", '—', '—', '—',
+                                T(p.get('purpose', '—'))])
             it.setData(0, Qt.ItemDataRole.UserRole, p['id'])
+            it.setData(2, Qt.ItemDataRole.UserRole, context)
+            it.setToolTip(0, T('Виртуальная папка: ') +
+                          model_folders.effective_folder(p, self.cfg))
             self.tree.addTopLevelItem(it)
+        self.tree.setSortingEnabled(was_sorting)
+        if was_sorting:
+            self.tree.sortItems(sort_column if sort_column >= 0 else 0, sort_order)
         self._tree_loading = False
-        if selected: self.select_tree_alias(self.tree, selected)
+        self.refresh_model_folder_selector()
+        if selected:
+            self.select_tree_alias(self.tree, selected)
         self.update_model_status_cells()
 
     def update_model_status_cells(self):
@@ -970,6 +1083,14 @@ class Window(QMainWindow):
                 for column in (3, 4, 5):
                     it.setForeground(column, QBrush(QColor('#e9f0fb')))
             it.setToolTip(4, T('Фактический порт процесса') if live else T('Порт, заданный в профиле'))
+            try:
+                port_num = int(state.get('port') if live else profile.get('port', 8080))
+            except (ValueError, TypeError):
+                port_num = -1
+            it.setData(4, Qt.ItemDataRole.UserRole, port_num)
+            it.setData(5, Qt.ItemDataRole.UserRole,
+                       int(state.get('pid') or 0) if live else -1)
+        self.apply_model_filters()
 
     def on_model_selected(self, *_):
         p = self.selected_model_profile()
