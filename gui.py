@@ -9,7 +9,7 @@ from pathlib import Path
 from collections import deque
 
 try:
-    from PySide6.QtCore import Qt, QThread, Signal, QTimer, QProcess
+    from PySide6.QtCore import Qt, QThread, Signal, QTimer, QProcess, QPoint
     from PySide6.QtGui import QPainter, QColor, QPen, QFont, QDesktopServices, QTextCursor, QIcon, QAction, QBrush
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout,
@@ -21,7 +21,7 @@ try:
     from PySide6.QtCore import QUrl
 except ImportError:
     try:
-        from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal, QTimer, QProcess, QUrl
+        from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal, QTimer, QProcess, QUrl, QPoint
         from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QDesktopServices, QTextCursor, QIcon, QAction, QBrush
         from PyQt6.QtWidgets import (
             QApplication, QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout,
@@ -1200,128 +1200,166 @@ class Window(QMainWindow):
             menu.addAction(T('－ Удалить'), self.delete_selected_model)
         menu.exec(self.tree.viewport().mapToGlobal(point))
 
-    def refresh_model_folder_selector(self):
-        """Rebuild virtual-folder filter without changing saved config or GGUF."""
-        selected = self.folder_selector.currentData()
-        counts = model_folders.folder_counts(self.cfg)
-        self.folder_selector.blockSignals(True)
-        self.folder_selector.clear()
-        self.folder_selector.addItem(T(f"Все папки ({len(self.cfg.get('models', []))})"),
-                                     model_folders.ALL_FOLDERS)
-        self.folder_selector.addItem(
-            T(f"Без папки ({counts.get(model_folders.UNFILED, 0)})"),
-            model_folders.UNFILED)
-        for name in model_folders.list_folders(self.cfg):
-            self.folder_selector.addItem(f"{name} ({counts.get(name, 0)})", name)
-        index = self.folder_selector.findData(selected)
-        self.folder_selector.setCurrentIndex(index if index >= 0 else 0)
-        self.folder_selector.blockSignals(False)
+    def iter_model_items(self):
+        """Yield only real model rows; never try to inspect a virtual folder."""
+        for i in range(self.tree.topLevelItemCount()):
+            folder_item = self.tree.topLevelItem(i)
+            for j in range(folder_item.childCount()):
+                yield folder_item.child(j)
+
+    def first_visible_model_item(self):
+        return next((item for item in self.iter_model_items()
+                     if not item.isHidden() and not item.parent().isHidden()), None)
 
     def apply_model_filters(self, *_):
-        if not hasattr(self, 'tree') or not hasattr(self, 'model_filter_edits'):
+        if not hasattr(self, 'tree') or not hasattr(self, 'column_filters'):
             return
-        selected_folder = self.folder_selector.currentData()
-        filters = [line.text() for line in self.model_filter_edits]
         shown = 0
+        active = bool(self.column_filters)
         for i in range(self.tree.topLevelItemCount()):
-            item = self.tree.topLevelItem(i)
-            alias = item.data(0, Qt.ItemDataRole.UserRole)
-            profile = self.profile_lookup(alias) or {}
-            folder = model_folders.effective_folder(profile, self.cfg)
-            row_values = [item.text(c) for c in range(self.tree.columnCount())]
-            visible = model_folders.matches_row(folder, selected_folder,
-                                                 row_values, filters)
-            item.setHidden(not visible)
-            shown += int(visible)
-        if hasattr(self, 'visible_models_label'):
-            total = self.tree.topLevelItemCount()
-            self.visible_models_label.setText(T(f'Показано моделей: {shown} из {total}'))
-        selected = self.tree.currentItem()
-        if selected is None or selected.isHidden():
-            first = next((self.tree.topLevelItem(i)
-                          for i in range(self.tree.topLevelItemCount())
-                          if not self.tree.topLevelItem(i).isHidden()), None)
-            self.tree.setCurrentItem(first)
+            group = self.tree.topLevelItem(i)
+            count = 0
+            for j in range(group.childCount()):
+                model = group.child(j)
+                visible = all(
+                    model.text(column) in accepted
+                    for column, accepted in self.column_filters.items())
+                model.setHidden(not visible)
+                count += int(visible)
+            group.setHidden(active and count == 0)
+            shown += count
+        if hasattr(self, 'status_label'):
+            # Status label is owned by the existing runtime; do not overwrite it.
+            self.tree.setToolTip(T(f'Видимых моделей: {shown} / {len(self.cfg.get("models", []))}'))
+        current = self.tree.currentItem()
+        if current is None or current.isHidden() or (current.parent() and current.parent().isHidden()):
+            first = self.first_visible_model_item()
+            if first:
+                self.tree.setCurrentItem(first)
+
+    def open_model_column_filter(self, column):
+        """Header click opens searchable, multi-select filter + explicit sort."""
+        if not 0 <= column < self.tree.columnCount():
+            return
+        values = sorted({item.text(column) for item in self.iter_model_items()},
+                        key=lambda text: text.casefold())
+        headers = [T('Модель'), T('Статус'), T('Контекст'), 'GPU',
+                   T('Порт'), 'PID', T('Назначение')]
+        popup = ColumnFilterPopup(headers[column], values,
+                                  self.column_filters.get(column), self)
+        from_pos = self.tree.header().sectionViewportPosition(column)
+        popup.move(self.tree.header().mapToGlobal(
+            QPoint(max(0, from_pos), self.tree.header().height())))
+        if popup.exec() != QDialog.DialogCode.Accepted:
+            return
+        selection = popup.selected_values()
+        if selection is None:
+            self.column_filters.pop(column, None)
+        else:
+            self.column_filters[column] = selection
+        if popup.sort_order is not None:
+            self.column_sort = (column, popup.sort_order)
+            self.tree.sortItems(column, popup.sort_order)
+        for idx, title in enumerate(headers):
+            self.tree.headerItem().setText(
+                idx, title + (' ●' if idx in self.column_filters else ' ▾'))
+        self.apply_model_filters()
 
     def populate_model_tree(self):
+        """Group model rows under collapsible folders; identities never change."""
         selected = self.selected_alias() if self.tree.topLevelItemCount() else None
-        was_sorting = self.tree.isSortingEnabled()
-        sort_column = self.tree.sortColumn()
-        sort_order = self.tree.header().sortIndicatorOrder()
+        expanded = {}
+        if self.tree.topLevelItemCount():
+            for i in range(self.tree.topLevelItemCount()):
+                group = self.tree.topLevelItem(i)
+                expanded[group.data(0, FOLDER_ROLE)] = group.isExpanded()
         self._tree_loading = True
         self.tree.setSortingEnabled(False)
         self.tree.clear()
-        for p in self.cfg.get('models', []):
-            context = int(p.get('context', 32768) or 32768)
-            it = ModelTreeItem([p.get('name', p['id']), '—',
-                                f"{context // 1024}K", '—', '—', '—',
-                                T(p.get('purpose', '—'))])
-            it.setData(0, Qt.ItemDataRole.UserRole, p['id'])
-            it.setData(2, Qt.ItemDataRole.UserRole, context)
-            it.setToolTip(0, T('Виртуальная папка: ') +
-                          model_folders.effective_folder(p, self.cfg))
-            self.tree.addTopLevelItem(it)
-        self.tree.setSortingEnabled(was_sorting)
-        if was_sorting:
-            self.tree.sortItems(sort_column if sort_column >= 0 else 0, sort_order)
+        grouped = {}
+        for profile in self.cfg.get('models', []):
+            group = model_folders.effective_folder(profile, self.cfg)
+            grouped.setdefault(group, []).append(profile)
+        folder_names = model_folders.list_folders(self.cfg)
+        if grouped.get(model_folders.UNFILED):
+            folder_names.append(model_folders.UNFILED)
+        for folder in folder_names:
+            profiles = grouped.get(folder, [])
+            label = T('Без папки') if folder == model_folders.UNFILED else folder
+            root = ModelTreeItem([f'📁 {label} ({len(profiles)})', '', '', '', '', '', ''])
+            root.setData(0, FOLDER_ROLE, folder)
+            root.setFlags((root.flags() | Qt.ItemFlag.ItemIsDropEnabled)
+                          & ~Qt.ItemFlag.ItemIsDragEnabled)
+            root.setForeground(0, QBrush(QColor('#9ac9ff')))
+            self.tree.addTopLevelItem(root)
+            for profile in profiles:
+                context = int(profile.get('context', 32768) or 32768)
+                favorite = bool(profile.get('favorite'))
+                name = ('★ ' if favorite else '') + profile.get('name', profile['id'])
+                item = ModelTreeItem([name, '—', f'{context // 1024}K',
+                                      '—', '—', '—',
+                                      T(profile.get('purpose', '—'))])
+                item.setData(0, Qt.ItemDataRole.UserRole, profile['id'])
+                item.setData(2, Qt.ItemDataRole.UserRole, context)
+                item.setFlags((item.flags() | Qt.ItemFlag.ItemIsDragEnabled)
+                              & ~Qt.ItemFlag.ItemIsDropEnabled)
+                if favorite:
+                    item.setForeground(0, QBrush(QColor('#ffd478')))
+                item.setToolTip(0, T('★ Избранное' if favorite else 'Профиль модели') +
+                                '\n' + T('Папка: ') + label)
+                root.addChild(item)
+            root.setExpanded(expanded.get(folder, True))
         self._tree_loading = False
-        self.refresh_model_folder_selector()
+        if hasattr(self, 'column_sort'):
+            column, order = self.column_sort
+            self.tree.sortItems(column, order)
         if selected:
             self.select_tree_alias(self.tree, selected)
         self.update_model_status_cells()
 
     def update_model_status_cells(self):
-        # Qt can reorder rows while their sort-column text changes.
-        # Freeze sorting for the full refresh to avoid skipping other profiles.
-        was_sorting = self.tree.isSortingEnabled()
-        sort_column = self.tree.sortColumn()
-        sort_order = self.tree.header().sortIndicatorOrder()
-        self.tree.setSortingEnabled(False)
-        try:
-            palette = {
-                'running': (T('● Запущена'), '#63d6ac'),
-                'starting': (T('● Загрузка'), '#ffc578'),
-                'error': (T('● Ошибка'), '#e58f9b'),
-                'external': (T('● Порт занят'), '#ffc578'),
-                'port_conflict': (T('● Порт занят'), '#ffc578'),
-                'invalid_profile': (T('⚠ Исправить ID'), '#e58f9b'),
-                'stopped': (T('● Остановлена'), '#a1b4cf'),
-                'unstarted': (T('○ Не запущена'), '#91a4bc'),
-            }
-            states = multi.all_states()
-            for i in range(self.tree.topLevelItemCount()):
-                it = self.tree.topLevelItem(i)
-                alias = it.data(0, Qt.ItemDataRole.UserRole)
-                profile = self.profile_lookup(alias) or {}
-                state = states.get(alias, {})
-                status, color = palette.get(state.get('state', 'unstarted'), (T('○ Не запущена'), '#91a4bc'))
-                it.setText(1, status)
-                it.setForeground(1, QBrush(QColor(color)))
-                live = bool(state.get('managed') and state.get('alive'))
-                gpu = str(state.get('gpu') or profile.get('gpu') or T('авто'))
-                gpu_text = gpu if len(gpu) < 23 else gpu[:18] + '…'
-                it.setText(3, gpu_text)
-                it.setToolTip(3, T(f"GPU {'запущенного сервера' if live else 'в настройках'}: {gpu}"))
-                it.setText(4, str(state.get('port') if live else profile.get('port', 8080)))
-                it.setText(5, str(state.get('pid')) if live and state.get('pid') else '—')
-                if not live:
-                    for column in (3, 4, 5):
-                        it.setForeground(column, QBrush(QColor('#8295b1')))
-                else:
-                    for column in (3, 4, 5):
-                        it.setForeground(column, QBrush(QColor('#e9f0fb')))
-                it.setToolTip(4, T('Фактический порт процесса') if live else T('Порт, заданный в профиле'))
-                try:
-                    port_num = int(state.get('port') if live else profile.get('port', 8080))
-                except (ValueError, TypeError):
-                    port_num = -1
-                it.setData(4, Qt.ItemDataRole.UserRole, port_num)
-                it.setData(5, Qt.ItemDataRole.UserRole,
-                           int(state.get('pid') or 0) if live else -1)
-        finally:
-            self.tree.setSortingEnabled(was_sorting)
-            if was_sorting:
-                self.tree.sortItems(sort_column if sort_column >= 0 else 0, sort_order)
+        palette = {
+            'running': (T('● Запущена'), '#63d6ac'),
+            'starting': (T('● Загрузка'), '#ffc578'),
+            'error': (T('● Ошибка'), '#e58f9b'),
+            'external': (T('● Порт занят'), '#ffc578'),
+            'port_conflict': (T('● Порт занят'), '#ffc578'),
+            'invalid_profile': (T('⚠ Исправить ID'), '#e58f9b'),
+            'stopped': (T('● Остановлена'), '#a1b4cf'),
+            'unstarted': (T('○ Не запущена'), '#91a4bc'),
+        }
+        states = multi.all_states()
+        # The tree remains structurally stable during status changes.
+        for item in self.iter_model_items():
+            alias = item.data(0, Qt.ItemDataRole.UserRole)
+            profile = self.profile_lookup(alias) or {}
+            state = states.get(alias, {})
+            status, color = palette.get(state.get('state', 'unstarted'),
+                                        (T('○ Не запущена'), '#91a4bc'))
+            item.setText(1, status)
+            item.setForeground(1, QBrush(QColor(color)))
+            live = bool(state.get('managed') and state.get('alive'))
+            gpu = str(state.get('gpu') or profile.get('gpu') or T('авто'))
+            item.setText(3, gpu if len(gpu) < 23 else gpu[:18] + '…')
+            item.setToolTip(3, T('GPU: ') + gpu)
+            port = state.get('port') if live else profile.get('port', 8080)
+            item.setText(4, str(port))
+            item.setText(5, str(state.get('pid')) if live and state.get('pid') else '—')
+            item.setToolTip(4, T('Фактический порт процесса') if live
+                            else T('Порт профиля'))
+            try:
+                numeric_port = int(port)
+            except (TypeError, ValueError):
+                numeric_port = -1
+            item.setData(4, Qt.ItemDataRole.UserRole, numeric_port)
+            item.setData(5, Qt.ItemDataRole.UserRole,
+                         int(state.get('pid') or 0) if live else -1)
+            for column in (3, 4, 5):
+                item.setForeground(column, QBrush(QColor(
+                    '#e9f0fb' if live else '#8295b1')))
+        if hasattr(self, 'column_sort'):
+            column, order = self.column_sort
+            self.tree.sortItems(column, order)
         self.apply_model_filters()
 
     def on_model_selected(self, *_):
