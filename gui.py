@@ -1559,7 +1559,12 @@ class Window(QMainWindow):
         if not profile:
             self.model_network_btn.setText(T('🌐 Клиент: модель не выбрана'))
             return
-        disabled = offline_client.mode(profile) == 'offline'
+        try:
+            disabled = offline_client.mode(profile) == 'offline'
+        except ValueError:
+            self.model_network_btn.setText(T('⚠ Некорректная настройка сети'))
+            self.model_network_btn.setEnabled(False)
+            return
         self.model_network_btn.setText(
             T('🔒 Клиент: интернет выключен') if disabled else
             T('🌐 Клиент: интернет разрешён'))
