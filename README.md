@@ -8,7 +8,7 @@ AI Model Lab is an experimental desktop application built with **Python and Qt6*
 
 ## Features
 
-- **LLM profiles:** add, edit, clone and remove GGUF configurations; adjust context, sampling, CPU/GPU offload, KV cache and multimodal settings.
+- **LLM profiles:** add, edit, clone and remove GGUF configurations; adjust context, sampling, CPU/GPU offload, KV cache and multimodal settings. Preview/import locally available GGUFs from both `Censored` and `Uncensored` directories without changing existing profiles ([guide](docs/MODEL_IMPORT_RU.md), Russian).
 - **Multiple independent servers:** assign a port and NVIDIA GPU index/UUID per profile; run more than one model simultaneously when hardware resources permit.
 - **Local monitoring:** GPU load, VRAM, RAM, process status, live logs and benchmark history.
 - **AI clients:** open a running model with **Pi** or **OpenCode**, keeping per-model client preferences. Optional [Pi Office Bridge](docs/PI_OFFICE_BRIDGE.md) displays actual Pi sessions in Agent Office.
