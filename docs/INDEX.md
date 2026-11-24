@@ -10,6 +10,7 @@ This directory contains AI Model Lab's user guides, release notes and contributo
 |---|---|---|
 | Project overview / Обзор | [Main README](../README.md) | [README_RU.md](README_RU.md) |
 | Installation / Установка | [INSTALL.md](INSTALL.md) | [INSTALL_RU.md](INSTALL_RU.md) |
+| GGUF catalogue import / Импорт моделей | [Russian guide](MODEL_IMPORT_RU.md) | [MODEL_IMPORT_RU.md](MODEL_IMPORT_RU.md) |
 | Benchmarks / Тесты | [BENCHMARKS.md](BENCHMARKS.md) | [BENCHMARKS.md](BENCHMARKS.md) |
 | Localization / Переводы | [LOCALIZATION.md](LOCALIZATION.md) | [LOCALIZATION.md](LOCALIZATION.md) |
 | Pi Office Bridge | [PI_OFFICE_BRIDGE.md](PI_OFFICE_BRIDGE.md) | [PI_OFFICE_BRIDGE_RU.md](PI_OFFICE_BRIDGE_RU.md) |
