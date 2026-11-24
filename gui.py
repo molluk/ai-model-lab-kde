@@ -37,6 +37,7 @@ except ImportError:
 import core
 import multi
 import model_catalog
+import model_maintenance
 import client_launcher
 import custom_services
 import shutdown_manager
@@ -731,8 +732,24 @@ class Window(QMainWindow):
         self.shutdown_job = None
         if not report.get('success'):
             errors = '\n'.join(report.get('failed', [])) or T('Не все процессы остановлены.')
-            QMessageBox.warning(self, T('Неполное завершение'),
-                                T('Не удалось остановить все управляемые сервисы. Приложение останется открытым.') + '\n\n' + errors)
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle(T('Неполное завершение'))
+            dialog.setIcon(QMessageBox.Icon.Warning)
+            dialog.setText(T('Не все сервисы удалось остановить. Что сделать?'))
+            dialog.setInformativeText(errors)
+            gui_only = dialog.addButton(
+                T('Закрыть только интерфейс (сервисы оставить)'),
+                QMessageBox.ButtonRole.AcceptRole)
+            inspect = dialog.addButton(T('Оставить окно открытым'),
+                                       QMessageBox.ButtonRole.RejectRole)
+            dialog.setDefaultButton(inspect)
+            dialog.exec()
+            if dialog.clickedButton() == gui_only:
+                # Do not repeat termination or touch unowned processes.
+                # closeEvent still checks active tests/unsaved edits.
+                self.exit_requested = True
+                self.close()
+                return
             self.set_message(T('Остановка завершилась с ошибками — проверь сервисы.'))
             self.refresh_status()
             return
@@ -829,6 +846,11 @@ class Window(QMainWindow):
         actions.addWidget(slim_btn(T('🔎 Найти GGUF'), self.import_local_models))
         actions.addStretch()
         left_layout.addLayout(actions)
+        maintenance_row = QHBoxLayout()
+        maintenance_row.addWidget(slim_btn(T('🛠 Упорядочить профили'),
+                                           self.maintain_model_profiles))
+        maintenance_row.addStretch()
+        left_layout.addLayout(maintenance_row)
         self.status_label = QLabel(T('Статус: ожидание')); self.status_label.setObjectName('Subheader')
         self.status_label.setWordWrap(True); left_layout.addWidget(self.status_label)
         logs_group = QGroupBox(T('Живой журнал выбранной модели')); logs_layout = QVBoxLayout(logs_group)
@@ -1928,6 +1950,114 @@ class Window(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self,T('Ошибка профиля'),str(exc))
             return False
+
+    def maintain_model_profiles(self):
+        """Preview every edit and removal; never modify GGUF files."""
+        if self.editor_dirty and not self.confirm_discard_or_save():
+            return
+        try:
+            states = multi.all_states()
+            active = [alias for alias, state in states.items()
+                      if state.get('managed') and state.get('alive')]
+            if active:
+                QMessageBox.warning(
+                    self, T('Обслуживание профилей'),
+                    T('Для безопасного изменения каталога сначала останови '
+                      'управляемые модели:\n') + '\n'.join(active))
+                return
+            # Re-read from disk instead of a possibly stale GUI cache.
+            actual = core.config()
+            plan = model_maintenance.plan_maintenance(actual)
+        except Exception as exc:
+            QMessageBox.warning(self, T('Анализ профилей'), str(exc))
+            return
+        changed = plan['changes']
+        suggestions = plan['suggested']
+        duplicate = [x for x in suggestions if x['type'] == 'duplicate']
+        missing = [x for x in suggestions if x['type'] == 'missing']
+        if not changed and not suggestions:
+            QMessageBox.information(self, T('Анализ профилей'),
+                                    T('Изменений не требуется.') + '\n' +
+                                    '\n'.join(plan['warnings'][:10]))
+            return
+        report_lines = [
+            f"GGUF: {plan['found_files']}",
+            f"Изменить профилей: {len(changed)}",
+            f"Убрать дублирующих профилей: {len(duplicate)}",
+            f"Отсутствующих GGUF (только предложение): {len(missing)}",
+            "",
+        ]
+        for item in changed:
+            after = item['after']
+            report_lines.append(
+                f"✎ {item['id']}\n"
+                f"    {after.get('name')} — {after.get('purpose')}\n"
+                f"    context={after.get('context')} "
+                f"ngl={after.get('ngl')} GPU={after.get('gpu') or 'auto'}"
+            )
+        for item in suggestions:
+            report_lines.append(f"⚠ {item['id']}: {item['reason']}")
+        for warning in plan['warnings']:
+            report_lines.append(f"! {warning}")
+        dialog = QDialog(self)
+        dialog.setWindowTitle(T('Проверить изменения профилей'))
+        dialog.resize(850, 620)
+        layout = QVBoxLayout(dialog)
+        label = QLabel(T(
+            'Изменяются только настройки профилей (models.json). '
+            'Файлы GGUF не удаляются, модели не запускаются. '
+            'Отсутствующие модели по умолчанию сохраняются.'
+        ))
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        preview = QPlainTextEdit()
+        preview.setReadOnly(True)
+        preview.setPlainText('\n'.join(report_lines))
+        layout.addWidget(preview, 1)
+        duplicate_box = QCheckBox(T(
+            'Удалить повторные профили с одинаковым GGUF (файлы не затрагивать)'
+        ))
+        duplicate_box.setEnabled(bool(duplicate))
+        duplicate_box.setChecked(False)
+        layout.addWidget(duplicate_box)
+        missing_box = QCheckBox(T(
+            'Также удалить профили с отсутствующим GGUF (файлы моделей не затрагивать)'
+        ))
+        missing_box.setEnabled(bool(missing))
+        missing_box.setChecked(False)
+        layout.addWidget(missing_box)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(T('Применить'))
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(T('Отмена'))
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            # Protect against updates made by another process since preview.
+            if core.config() != actual:
+                raise RuntimeError(T('models.json изменён после анализа; запусти проверку снова.'))
+            data = model_maintenance.apply_selection(
+                plan, remove_missing=missing_box.isChecked(),
+                remove_duplicates=duplicate_box.isChecked())
+            if data == actual:
+                return
+            backup = model_catalog.save_config(core.MODELS, data)
+            self.cfg = data
+            self.editor_loading = False
+            self.editor_dirty = False
+            self.editor_current_alias = None
+            self.populate_settings_tree()
+            self.populate_model_tree()
+            self.set_message(T('Профили обновлены, резервная копия: ') + str(backup))
+            QMessageBox.information(
+                self, T('Профили обновлены'),
+                T('Настройки сохранены. Для новых профилей проверь фактическое '
+                  'потребление памяти и успешность запуска CUDA.'))
+        except Exception as exc:
+            QMessageBox.warning(self, T('Обновление профилей'), str(exc))
 
     def import_local_models(self):
         """Preview and import both Censored/Uncensored folders without touching GGUF."""
