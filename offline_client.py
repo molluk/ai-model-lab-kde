@@ -29,7 +29,11 @@ POLICIES = ("online", "offline")
 
 def mode(profile: dict | None) -> str:
     value = (profile or {}).get("client_network", "online")
-    return value if value in POLICIES else "online"
+    if value not in POLICIES:
+        # A typo/corrupt policy must never silently grant Internet access.
+        raise ValueError("Некорректный режим сети профиля (online/offline); "
+                         "запуск клиента запрещён до исправления")
+    return value
 
 
 def require_bubblewrap() -> str:
