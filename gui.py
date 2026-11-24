@@ -1050,103 +1050,155 @@ class Window(QMainWindow):
         core.atomic_json(core.SETTINGS, settings)
         self.settings_data = settings
 
-    def save_model_folder_change(self, updated, *, preferred_folder=None,
-                                 preferred_alias=None):
-        """Use existing atomic backup; never move GGUF or modify active servers."""
+    def save_model_folder_change(self, updated, *, preferred_alias=None):
+        """Only profile metadata changes; preserve GGUF, running services and backups."""
         if core.config() != self.cfg:
-            raise RuntimeError(T('models.json изменён снаружи. Обнови окно перед сохранением.'))
+            raise RuntimeError(T('models.json изменён извне; открой приложение заново.'))
         if updated == self.cfg:
             return
         model_catalog.save_config(core.MODELS, updated)
         self.cfg = updated
         self.populate_settings_tree()
         self.populate_model_tree()
-        if preferred_folder is not None:
-            index = self.folder_selector.findData(preferred_folder)
-            if index >= 0:
-                self.folder_selector.setCurrentIndex(index)
         if preferred_alias:
             self.select_tree_alias(self.tree, preferred_alias)
         self.apply_model_filters()
 
+    def selected_folder_name(self):
+        item = self.tree.currentItem()
+        if item is None:
+            return None
+        root = item if item.parent() is None else item.parent()
+        return root.data(0, FOLDER_ROLE)
+
     def create_model_folder(self):
         if self.editor_dirty and not self.confirm_discard_or_save():
             return
-        name, accepted = QInputDialog.getText(
-            self, T('Создать папку'), T('Название виртуальной папки:'))
-        if not accepted:
+        name, ok = QInputDialog.getText(
+            self, T('Новая виртуальная папка'), T('Название папки:'))
+        if not ok:
             return
         try:
-            folder = model_folders.check_folder(name)
-            updated = model_folders.create_folder(self.cfg, folder)
-            self.save_model_folder_change(updated, preferred_folder=folder)
+            updated = model_folders.create_folder(self.cfg, name)
+            self.save_model_folder_change(updated)
         except Exception as exc:
-            QMessageBox.warning(self, T('Создать папку'), str(exc))
+            QMessageBox.warning(self, T('Создание папки'), str(exc))
 
-    def rename_model_folder(self):
+    def rename_model_folder(self, folder=None):
+        old = folder if isinstance(folder, str) else self.selected_folder_name()
+        if old in (None, model_folders.ALL_FOLDERS, model_folders.UNFILED):
+            return
         if self.editor_dirty and not self.confirm_discard_or_save():
             return
-        old = self.folder_selector.currentData()
-        if old in (None, model_folders.ALL_FOLDERS, model_folders.UNFILED):
-            QMessageBox.information(self, T('Папка'), T('Сначала выбери папку из списка.'))
-            return
-        name, accepted = QInputDialog.getText(
+        new_name, ok = QInputDialog.getText(
             self, T('Переименовать папку'), T('Новое название:'), text=old)
-        if not accepted:
+        if not ok:
             return
         try:
-            renamed = model_folders.check_folder(name)
-            updated = model_folders.rename_folder(self.cfg, old, renamed)
-            self.save_model_folder_change(updated, preferred_folder=renamed)
+            updated = model_folders.rename_folder(self.cfg, old, new_name)
+            self.save_model_folder_change(updated)
         except Exception as exc:
-            QMessageBox.warning(self, T('Переименовать папку'), str(exc))
+            QMessageBox.warning(self, T('Переименование папки'), str(exc))
 
-    def delete_model_folder(self):
-        if self.editor_dirty and not self.confirm_discard_or_save():
-            return
-        old = self.folder_selector.currentData()
+    def delete_model_folder(self, folder=None):
+        old = folder if isinstance(folder, str) else self.selected_folder_name()
         if old in (None, model_folders.ALL_FOLDERS, model_folders.UNFILED):
-            QMessageBox.information(self, T('Папка'), T('Сначала выбери папку из списка.'))
+            return
+        if self.editor_dirty and not self.confirm_discard_or_save():
             return
         count = model_folders.folder_counts(self.cfg).get(old, 0)
         answer = QMessageBox.question(
-            self, T('Удалить виртуальную папку'),
-            T(f'Удалить папку «{old}»? {count} профилей перейдут в «Без папки».\n'
-              'Файлы GGUF и сами профили останутся без изменений.'),
+            self, T('Удаление папки'),
+            T(f'Удалить виртуальную папку «{old}»?\n'
+              f'{count} моделей перейдут в «Без папки».\n'
+              'Сами профили и GGUF на диске не удаляются.'),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            updated = model_folders.delete_folder(self.cfg, old)
-            self.save_model_folder_change(updated, preferred_folder=model_folders.UNFILED)
+            self.save_model_folder_change(model_folders.delete_folder(self.cfg, old))
         except Exception as exc:
-            QMessageBox.warning(self, T('Удалить папку'), str(exc))
+            QMessageBox.warning(self, T('Удаление папки'), str(exc))
+
+    def assign_model_folder(self, alias, folder):
+        if self.editor_dirty and not self.confirm_discard_or_save():
+            return
+        try:
+            updated = model_folders.move_model(self.cfg, alias, folder)
+            self.save_model_folder_change(updated, preferred_alias=alias)
+        except Exception as exc:
+            QMessageBox.warning(self, T('Перемещение модели'), str(exc))
+
+    def on_model_folder_dropped(self, alias, folder):
+        self.assign_model_folder(alias, folder)
 
     def move_selected_model_folder(self):
         alias = self.selected_alias()
         if not alias:
-            QMessageBox.information(self, T('Модель'), T('Сначала выбери профиль модели.'))
             return
+        folders = [model_folders.UNFILED] + model_folders.list_folders(self.cfg)
+        labels = [T('Без папки')] + folders[1:]
+        current = model_folders.effective_folder(
+            self.selected_model_profile(), self.cfg)
+        index = folders.index(current) if current in folders else 0
+        chosen, ok = QInputDialog.getItem(
+            self, T('Переместить модель'), T('Папка:'), labels, index, False)
+        if ok:
+            self.assign_model_folder(alias, folders[labels.index(chosen)])
+
+    def toggle_model_favorite(self, alias):
         if self.editor_dirty and not self.confirm_discard_or_save():
             return
-        folders = model_folders.list_folders(self.cfg)
-        names = [T('Без папки')] + folders
-        profile = self.profile_lookup(alias)
-        existing = model_folders.effective_folder(profile, self.cfg)
-        index = folders.index(existing) + 1 if existing in folders else 0
-        name, accepted = QInputDialog.getItem(
-            self, T('Переместить профиль'), T('Виртуальная папка:'),
-            names, index, False)
-        if not accepted:
-            return
-        target = model_folders.UNFILED if name == names[0] else name
         try:
-            updated = model_folders.move_model(self.cfg, alias, target)
-            self.save_model_folder_change(
-                updated, preferred_folder=target, preferred_alias=alias)
+            updated = json.loads(json.dumps(self.cfg))
+            p = next((p for p in updated['models'] if p.get('id') == alias), None)
+            if p is None:
+                raise ValueError(T('Не найден профиль модели'))
+            p['favorite'] = not bool(p.get('favorite', False))
+            self.save_model_folder_change(updated, preferred_alias=alias)
         except Exception as exc:
-            QMessageBox.warning(self, T('Переместить профиль'), str(exc))
+            QMessageBox.warning(self, T('Избранное'), str(exc))
+
+    def model_tree_context_menu(self, point):
+        """Context options depend on clicked folder or model; no extra toolbar."""
+        item = self.tree.itemAt(point)
+        menu = QMenu(self.tree)
+        if item is None:
+            menu.addAction(T('📁 Создать папку'), self.create_model_folder)
+        elif item.parent() is None:
+            folder = item.data(0, FOLDER_ROLE)
+            menu.addAction(T('📁 Создать папку'), self.create_model_folder)
+            if folder != model_folders.UNFILED:
+                menu.addSeparator()
+                menu.addAction(T('✎ Переименовать папку'),
+                               lambda checked=False, f=folder: self.rename_model_folder(f))
+                menu.addAction(T('－ Удалить папку'),
+                               lambda checked=False, f=folder: self.delete_model_folder(f))
+            menu.addSeparator()
+            menu.addAction(
+                T('Свернуть папку') if item.isExpanded() else T('Развернуть папку'),
+                lambda: item.setExpanded(not item.isExpanded()))
+        else:
+            self.tree.setCurrentItem(item)
+            alias = item.data(0, Qt.ItemDataRole.UserRole)
+            profile = self.profile_lookup(alias) or {}
+            marked = bool(profile.get('favorite'))
+            menu.addAction(
+                T('☆ Убрать из избранного') if marked else T('★ В избранное'),
+                lambda checked=False, a=alias: self.toggle_model_favorite(a))
+            submenu = menu.addMenu(T('📁 Переместить в папку'))
+            for folder in [model_folders.UNFILED] + model_folders.list_folders(self.cfg):
+                title = T('Без папки') if folder == model_folders.UNFILED else folder
+                submenu.addAction(
+                    title,
+                    lambda checked=False, a=alias, f=folder: self.assign_model_folder(a, f))
+            menu.addAction(T('📁 Создать папку'), self.create_model_folder)
+            menu.addSeparator()
+            menu.addAction(T('✎ Изменить'), self.open_selected_in_editor)
+            menu.addAction(T('⧉ Клонировать'), self.clone_selected_model)
+            menu.addAction(T('－ Удалить'), self.delete_selected_model)
+        menu.exec(self.tree.viewport().mapToGlobal(point))
 
     def refresh_model_folder_selector(self):
         """Rebuild virtual-folder filter without changing saved config or GGUF."""
