@@ -12,7 +12,7 @@ mkdir -p "$DEST" "$HOME/.local/bin" "$HOME/.local/share/applications"
 if [[ -f "$DEST/gui.py" ]]; then
   BACKUP="$DEST/data/backups/release-$(date +%Y%m%d_%H%M%S)"
   mkdir -p "$BACKUP"
-  for f in core.py multi.py model_catalog.py model_maintenance.py version_info.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py run.sh install.sh; do
+  for f in core.py multi.py model_catalog.py model_maintenance.py model_folders.py version_info.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py run.sh install.sh; do
     if [[ -f "$DEST/$f" ]]; then cp -p "$DEST/$f" "$BACKUP/$f"; fi
   done
   printf 'Резервная копия прежнего кода: %s\n' "$BACKUP"
