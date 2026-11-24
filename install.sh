@@ -19,7 +19,7 @@ if [[ -f "$DEST/gui.py" ]]; then
 fi
 
 # Preserve existing profiles and reports when upgrading.
-for name in core.py multi.py model_catalog.py model_maintenance.py model_folders.py version_info.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py release_preflight.py run.sh README.md LICENSE NOTICE; do
+for name in core.py multi.py model_catalog.py model_maintenance.py model_folders.py model_inventory.py offline_client.py artifact_cleanup.py version_info.py gui.py bench.py client_launcher.py pi_bridge_manager.py i18n.py custom_services.py shutdown_manager.py service_browser.py release_preflight.py run.sh README.md LICENSE NOTICE; do
   install -m 0644 "$SOURCE/$name" "$DEST/$name"
 done
 install -m 0755 "$SOURCE/install.sh" "$DEST/install.sh"
