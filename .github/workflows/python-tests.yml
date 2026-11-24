@@ -37,3 +37,4 @@ jobs:
         run: |
           python -m unittest discover -s tests -p test_gui_startup_smoke.py -v
           python -m unittest discover -s tests -p test_gui_model_folders_qt.py -v
+          python -m unittest discover -s tests -p test_gui_network_storage_qt.py -v

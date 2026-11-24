@@ -39,6 +39,8 @@ import multi
 import model_catalog
 import model_maintenance
 import model_folders
+import artifact_cleanup
+import offline_client
 import client_launcher
 import custom_services
 import shutdown_manager
@@ -526,6 +528,107 @@ class Window(QMainWindow):
                 pass
         self.set_message(T(f'Удалено логов: {deleted}'))
         QMessageBox.information(self, T('Логи'), T(f'Удалено логов: {deleted}. Журналы активных моделей сохранены.'))
+
+    def open_storage_cleanup(self):
+        """Explicit preview and confirmation; never purge user configurations."""
+        if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.information(self, T('Очистка'), T(
+                'Останови активный тест. Данные ещё записываются.'))
+            return
+        if any(job.isRunning() for job in self.jobs):
+            QMessageBox.information(self, T('Очистка'), T(
+                'Дождись окончания текущих операций.'))
+            return
+        try:
+            plan = artifact_cleanup.preview(
+                core.ROOT, protected=self.protected_log_paths())
+        except Exception as exc:
+            QMessageBox.warning(self, T('Очистка'), str(exc))
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(T('Обслуживание хранилища AI Model Lab'))
+        dialog.resize(570, 380)
+        layout = QVBoxLayout(dialog)
+        explanation = QLabel(T(
+            'Выбери, что удалить. Профили моделей, настройки, GGUF, '
+            'отчёты, Pi/OpenCode и журналы активных моделей сохраняются. '
+            'Резервные копии пригодятся для отката изменений — удаляй '
+            'только если они больше не нужны.'))
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+        categories = [
+            ('cache', T('🧽 Кэш приложения'), True),
+            ('logs', T('🧾 Старые журналы (неактивные)'), False),
+            ('backups', T('🗂 Резервные копии приложения'), False),
+        ]
+        selections = {}
+        for key, label, default in categories:
+            info = plan['categories'][key]
+            checkbox = QCheckBox(
+                f"{label}: {info['count']} файлов, "
+                f"{artifact_cleanup.pretty_bytes(info['bytes'])}")
+            checkbox.setChecked(default and info['count'] > 0)
+            checkbox.setEnabled(bool(info['count']))
+            layout.addWidget(checkbox)
+            selections[key] = checkbox
+        layout.addStretch()
+        hint = QLabel(T(
+            'Установка не затрагивается. Очистка не меняет models.json, '
+            'settings.json, services.json, папки data/reports или data/clients. '
+            'Перед удалением повторно проверяются пути и идентификаторы файлов.'))
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(T('Удалить выбранное'))
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(T('Отмена'))
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        chosen = [key for key, checkbox in selections.items() if checkbox.isChecked()]
+        if not chosen:
+            return
+        chosen_plan = {
+            'root': plan['root'],
+            'categories': {key: plan['categories'][key] for key in chosen},
+        }
+        total_count = sum(v['count'] for v in chosen_plan['categories'].values())
+        total_bytes = sum(v['bytes'] for v in chosen_plan['categories'].values())
+        question = T(f'Удалить {total_count} файлов '
+                     f'({artifact_cleanup.pretty_bytes(total_bytes)}) '
+                     'в выбранных категориях?')
+        if 'backups' in chosen:
+            question += T(
+                '\n\nВнимание: резервные копии будут удалены, '
+                'восстановление прежних версий настроек и кода '
+                'из этих копий станет невозможным.')
+        if QMessageBox.question(
+                self, T('Подтверждение удаления'), question,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+
+        def finished(ok, message):
+            if ok:
+                try:
+                    stats = json.loads(message)
+                    text = '; '.join(
+                        f"{label}: {stats[key]['removed']} удалено, "
+                        f"{stats[key]['skipped']} пропущено"
+                        for key, label, _ in categories if key in stats)
+                    QMessageBox.information(self, T('Очистка завершена'), text)
+                except (ValueError, KeyError, TypeError):
+                    QMessageBox.information(self, T('Очистка завершена'), message)
+
+        def clear():
+            # Protected logs are re-evaluated at execution time, not only preview.
+            return json.dumps(artifact_cleanup.apply(
+                chosen_plan, protected=self.protected_log_paths()),
+                ensure_ascii=False)
+        self.async_call(T('Очистка данных приложения'), clear, after=finished)
 
     def clear_all_reports(self):
         if self.proc and self.proc.state() != QProcess.ProcessState.NotRunning:
@@ -1042,6 +1145,14 @@ class Window(QMainWindow):
         self.client_hint.setWordWrap(True)
         self.client_hint.setStyleSheet('color:#a1b4cf;font-size:11px;')
         f.addWidget(self.client_hint)
+        self.model_network_btn = slim_btn(T('🌐 Клиент: интернет разрешён'),
+                                          self.toggle_selected_client_network)
+        self.model_network_btn.setToolTip(T(
+            'Для новых запусков Pi/OpenCode через AI Model Lab. '
+            'Офлайн использует bubblewrap и Unix-мост к локальной модели. '
+            'Не ограничивает llama-server, уже открытые сессии, WebUI '
+            'и сторонние программы.'))
+        f.addWidget(self.model_network_btn)
         f.addWidget(btn(T('✎ Редактировать параметры'), self.open_selected_in_editor))
         for sid, caption, action in (
             ('webui', T('🌐 Открыть WebUI'), self.open_webui),
@@ -1420,6 +1531,7 @@ class Window(QMainWindow):
                 self.model_info.setPlainText(T('Выбери модель внутри папки.'))
             if hasattr(self, 'model_action_btn'):
                 self.model_action_btn.setEnabled(False)
+            self.refresh_client_network_button()
             return
         if hasattr(self, 'model_action_btn'):
             self.model_action_btn.setEnabled(True)
@@ -1437,6 +1549,62 @@ class Window(QMainWindow):
         self.reset_log_view()
         self.refresh_model_action_button()
         self.refresh_preferred_client_button()
+        self.refresh_client_network_button()
+
+    def refresh_client_network_button(self):
+        if not hasattr(self, 'model_network_btn'):
+            return
+        profile = self.selected_model_profile()
+        self.model_network_btn.setEnabled(bool(profile))
+        if not profile:
+            self.model_network_btn.setText(T('🌐 Клиент: модель не выбрана'))
+            return
+        try:
+            disabled = offline_client.mode(profile) == 'offline'
+        except ValueError:
+            self.model_network_btn.setText(T('⚠ Некорректная настройка сети'))
+            self.model_network_btn.setEnabled(False)
+            return
+        self.model_network_btn.setText(
+            T('🔒 Клиент: интернет выключен') if disabled else
+            T('🌐 Клиент: интернет разрешён'))
+
+    def toggle_selected_client_network(self):
+        profile = self.selected_model_profile()
+        if not profile:
+            return
+        if self.editor_dirty and not self.confirm_discard_or_save():
+            return
+        disable = offline_client.mode(profile) == 'online'
+        if disable:
+            description = T(
+                'Новые сессии Pi/OpenCode для этой модели будут запускаться '
+                'в Linux network namespace (bubblewrap) без внешнего TCP/IP. '
+                'Локальный API будет доступен через Unix-сокет. '
+                'Если sandbox недоступен, запуск клиента отменяется.\n\n'
+                'Уже запущенные сессии, llama-server и сторонние программы '
+                'НЕ ограничиваются. Нужен установленный пакет bubblewrap.\n\n'
+                'Включить офлайн-режим клиента?')
+        else:
+            description = T('Разрешить новые сессии Pi/OpenCode с обычным '
+                            'сетевым доступом системы для выбранной модели?')
+        if QMessageBox.question(
+                self, T('Доступ к интернету клиента'), description,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            if core.config() != self.cfg:
+                raise RuntimeError(T('models.json изменился снаружи. Перезапусти приложение.'))
+            updated = json.loads(json.dumps(self.cfg))
+            p = next(p for p in updated['models'] if p['id'] == profile['id'])
+            p['client_network'] = 'offline' if disable else 'online'
+            backup = model_catalog.save_config(core.MODELS, updated)
+            self.cfg = updated
+            self.refresh_client_network_button()
+            self.set_message(T('Режим сети клиента сохранён. Backup: ') + str(backup))
+        except Exception as exc:
+            QMessageBox.warning(self, T('Настройки интернета клиента'), str(exc))
 
     def refresh_model_action_button(self):
         selected = self.selected_alias()
@@ -2104,6 +2272,9 @@ class Window(QMainWindow):
         grid.addWidget(slim_btn(T('🧾 Очистить все логи'), self.clear_all_logs, danger=True), cleanup_row, 1)
         grid.addWidget(slim_btn(T('📊 Очистить все отчёты'), self.clear_all_reports, danger=True), cleanup_row, 2)
         grid.addWidget(slim_btn(T('💾 Сохранить настройки программы'), self.save_all_settings, primary=True), cleanup_row, 3)
+        grid.addWidget(
+            slim_btn(T('🧹 Кэш / логи / резервные копии'), self.open_storage_cleanup),
+            cleanup_row + 1, 0, 1, 4)
         l.addWidget(common)
 
         split = QSplitter(Qt.Orientation.Horizontal)
