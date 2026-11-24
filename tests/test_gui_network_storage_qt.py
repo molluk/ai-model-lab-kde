@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import time
 from pathlib import Path
 import sys
 import tempfile
@@ -20,6 +21,7 @@ class NetworkAndStorageGuiTest(unittest.TestCase):
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
         from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
         import core
+        import cache_scheduler
         import custom_services
         import gui
         import multi
@@ -114,6 +116,49 @@ class NetworkAndStorageGuiTest(unittest.TestCase):
                     self.assertTrue(saved_report.exists())
                     self.assertEqual(json.loads(model_path.read_text())["models"][0][
                         "client_network"], "online")
+
+                    # Configurable cache timer is OFF by default; saving
+                    # 1-hour schedule persists it without touching models.
+                    self.assertFalse(window.cache_auto_enabled.isChecked())
+                    window.cache_auto_enabled.setChecked(True)
+                    window.cache_auto_hours.setValue(1)
+                    with mock.patch.object(gui.QMessageBox, "information"):
+                        window.save_all_settings()
+                    saved_settings = json.loads(settings.read_text())
+                    self.assertEqual(saved_settings["auto_cache_cleanup_hours"], 1)
+                    self.assertEqual(cache_scheduler.status(root, 1)["status"], "scheduled")
+                    self.assertIn("Следующая очистка", window.cache_auto_status.text())
+
+                    deferred_cache = root / "data/cache/autoclean.cache"
+                    deferred_cache.parent.mkdir(exist_ok=True, parents=True)
+                    deferred_cache.write_bytes(b"cache scheduled")
+                    cache_scheduler.configure(
+                        root, 1, now=time.time() - 3700, reset=True)
+                    with mock.patch.object(window, "cache_cleanup_busy", return_value=True):
+                        window.check_auto_cache_cleanup()
+                    self.assertTrue(deferred_cache.exists())
+
+                    # Now idle: Qt timer starts a worker, not a blocking GUI deletion.
+                    window.check_auto_cache_cleanup()
+                    stop = time.monotonic() + 4.0
+                    while time.monotonic() < stop:
+                        app.processEvents()
+                        if window.cache_job is None and not deferred_cache.exists():
+                            break
+                        time.sleep(0.01)
+                    self.assertFalse(deferred_cache.exists())
+                    self.assertEqual(cache_scheduler.status(root, 1)["status"], "scheduled")
+                    self.assertTrue(saved_report.exists())
+                    self.assertTrue(log.exists())
+                    self.assertTrue(model_path.exists())
+
+                    # Opt out: changing the interval to zero cancels future runs.
+                    window.cache_auto_enabled.setChecked(False)
+                    with mock.patch.object(gui.QMessageBox, "information"):
+                        window.save_all_settings()
+                    self.assertEqual(json.loads(settings.read_text())[
+                        "auto_cache_cleanup_hours"], 0)
+                    self.assertEqual(cache_scheduler.status(root, 0)["status"], "disabled")
                 finally:
                     window.exit_requested = True
                     window.close()
