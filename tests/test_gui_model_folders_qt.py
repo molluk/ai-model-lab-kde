@@ -74,7 +74,7 @@ class QtModelFoldersTest(unittest.TestCase):
                     app.processEvents()
                     tree_rect = QRect(window.tree.mapToGlobal(QPoint(0, 0)),
                                       window.tree.size())
-                    actions = [button for button in window.findChildren(QPushButton)
+                    actions = [button for button in window.tree.parentWidget().findChildren(QPushButton)
                                if button.text() in ('＋ Добавить', '⧉ Клонировать',
                                                     '－ Удалить', '✎ Изменить',
                                                     '🔎 Найти GGUF', '🛠 Профили')]
