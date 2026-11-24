@@ -68,7 +68,7 @@ class QtStartupSmokeTest(unittest.TestCase):
                                for item in models]
                     self.assertIn(bad, aliases)
                     invalid_item = models[aliases.index(bad)]
-                    self.assertIn("Исправить ID", invalid_item.text(1))
+                    self.assertIn("Исправить ID", invalid_item.text(2))
                     self.assertIsNotNone(invalid_item.parent())
                     window.refresh_status()
                 finally:
