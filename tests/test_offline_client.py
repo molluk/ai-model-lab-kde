@@ -33,7 +33,8 @@ class OfflineTests(unittest.TestCase):
     def test_per_model_default_and_modes(self):
         self.assertEqual(offline_client.mode({}), "online")
         self.assertEqual(offline_client.mode({"client_network": "offline"}), "offline")
-        self.assertEqual(offline_client.mode({"client_network": "bogus"}), "online")
+        with self.assertRaises(ValueError):
+            offline_client.mode({"client_network": "bogus"})
 
     def test_missing_bubblewrap_refuses_launch(self):
         with mock.patch.object(offline_client.shutil, "which", return_value=None):
