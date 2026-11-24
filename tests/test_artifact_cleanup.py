@@ -104,6 +104,17 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(self.log.exists())
         self.assertEqual(self.log.read_text(), "new log written after preview")
 
+    def test_directory_changed_to_symlink_after_preview_is_skipped(self):
+        plan = artifact_cleanup.preview(self.root, selected=("cache",))
+        cache_dir = self.root / "data/cache"
+        original = self.root / "data/cache-original"
+        cache_dir.rename(original)
+        cache_dir.symlink_to(original, target_is_directory=True)
+        result = artifact_cleanup.apply(plan)
+        self.assertEqual(result["cache"]["removed"], 1)  # only __pycache__ is safe
+        self.assertTrue((original / "work.cache").exists())
+        self.assertTrue(self.config.exists())
+
     def test_reject_unknown_category_and_root(self):
         with self.assertRaises(ValueError):
             artifact_cleanup.preview(self.root, selected=("weights",))
