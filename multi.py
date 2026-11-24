@@ -95,10 +95,16 @@ def owned(meta):
 
 
 def inspect(alias):
-    """Returns normalized state: unstarted/stopped/starting/running/error/external.
+    """Returns normalized state without crashing on malformed legacy profile IDs.
 
-    Presence of an unrelated service on the configured port never grants ownership.
+    Invalid IDs cannot be launched. The GUI can still show the offending profile
+    so the user can repair it through the preview/backup workflow.
     """
+    try:
+        validate_alias(alias)
+    except (ValueError, TypeError):
+        return {"state": "invalid_profile", "managed": False, "alive": False,
+                "port": None, "error": "Некорректный ID модели: длина максимум 80 символов"}
     m = metadata(alias)
     p = profile_by_id(alias) or {'port': m.get('port', 8080)}
     # Metadata stores the *last* launch port. For a stopped model, respect the
@@ -151,6 +157,7 @@ def active_instances():
 
 
 def launch(alias):
+    validate_alias(alias)
     p = profile_by_id(alias)
     if not p:
         raise ValueError('Неизвестный профиль: ' + alias)
@@ -242,6 +249,8 @@ def stop_all():
 
 
 def log_path(alias):
+    if inspect(alias).get("state") == "invalid_profile":
+        return None
     m = inspect(alias)
     path = m.get('log')
     if not path:
