@@ -7,7 +7,7 @@ import sys
 
 
 def check_source(root):
-    for name in ('gui.py', 'core.py', 'multi.py', 'model_catalog.py', 'model_maintenance.py', 'model_folders.py', 'model_inventory.py', 'offline_client.py', 'artifact_cleanup.py', 'version_info.py', 'bench.py', 'client_launcher.py', 'pi_bridge_manager.py', 'custom_services.py', 'shutdown_manager.py', 'service_browser.py'):
+    for name in ('gui.py', 'core.py', 'multi.py', 'model_catalog.py', 'model_maintenance.py', 'model_folders.py', 'model_inventory.py', 'offline_client.py', 'artifact_cleanup.py', 'cache_scheduler.py', 'version_info.py', 'bench.py', 'client_launcher.py', 'pi_bridge_manager.py', 'custom_services.py', 'shutdown_manager.py', 'service_browser.py'):
         path = root / name
         compile(path.read_text(encoding='utf-8'), str(path), 'exec')
 
