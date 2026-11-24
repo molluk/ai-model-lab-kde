@@ -943,6 +943,7 @@ class Window(QMainWindow):
             'error': (T('● Ошибка'), '#e58f9b'),
             'external': (T('● Порт занят'), '#ffc578'),
             'port_conflict': (T('● Порт занят'), '#ffc578'),
+            'invalid_profile': (T('⚠ Исправить ID'), '#e58f9b'),
             'stopped': (T('● Остановлена'), '#a1b4cf'),
             'unstarted': (T('○ Не запущена'), '#91a4bc'),
         }

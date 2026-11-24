@@ -10,6 +10,7 @@ import argparse
 import copy
 import datetime as dt
 import fnmatch
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -90,8 +91,27 @@ def _projector_for(model: Path, root: Path) -> Path | None:
 
 
 def _slug(value: str) -> str:
-    text = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return text[:88].rstrip("-") or "model"
+    """Stable, valid <= 80-character alias; never produce an invalid ID."""
+    raw = str(value)
+    text = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-") or "model"
+    if len(text) > 72:
+        # Keep a digest so paths sharing a long prefix remain distinguishable.
+        text = text[:62].rstrip("-") + "-" + sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return text
+
+
+def _unique_alias(value: str, used: set[str]) -> str:
+    base = _slug(value)
+    alias = base
+    serial = 2
+    while alias in used:
+        suffix = f"-{serial}"
+        alias = base[:80 - len(suffix)].rstrip("-") + suffix
+        serial += 1
+    if len(alias) > 80:
+        raise AssertionError("Generated alias exceeds 80 characters")
+    used.add(alias)
+    return alias
 
 
 def _quant(name: str) -> str:
@@ -164,13 +184,7 @@ def plan_import(config: dict, roots=None) -> dict:
         family = rel.parts[0] if len(rel.parts) > 1 else model.stem
         quant = _quant(model.name)
         category = root.name if root.name in ("Censored", "Uncensored") else root.name
-        identity = _slug(category + "-" + str(rel.with_suffix("")))
-        alias = identity
-        serial = 2
-        while alias in used_ids:
-            alias = f"{identity[:80]}-{serial}"
-            serial += 1
-        used_ids.add(alias)
+        alias = _unique_alias(category + "-" + str(rel.with_suffix("")), used_ids)
 
         port = next((n for n in range(8081, 9000)
                      if n not in used_ports and not _occupied(n)), None)
