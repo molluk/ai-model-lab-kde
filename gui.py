@@ -16,7 +16,7 @@ try:
         QHBoxLayout, QGridLayout, QTabWidget, QTreeWidget, QTreeWidgetItem, QGroupBox,
         QComboBox, QLineEdit, QSpinBox, QFileDialog, QMessageBox, QTextEdit, QSplitter,
         QTableWidget, QTableWidgetItem, QHeaderView, QFormLayout, QAbstractItemView,
-        QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle, QToolButton, QInputDialog
+        QScrollArea, QCheckBox, QDoubleSpinBox, QSystemTrayIcon, QMenu, QDialog, QPlainTextEdit, QDialogButtonBox, QStyle, QToolButton, QInputDialog, QWidgetAction
     )
     from PySide6.QtCore import QUrl
 except ImportError:
@@ -168,19 +168,111 @@ class Sparkline(QWidget):
 
 
 
+FOLDER_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+
+
 class ModelTreeItem(QTreeWidgetItem):
-    """Numeric sorting for Context, Port and PID; case-insensitive elsewhere."""
+    """Numeric sort inside folders; folders sort alphabetically."""
     def __lt__(self, other):
         tree = self.treeWidget()
         column = tree.sortColumn() if tree else 0
-        if column in (2, 4, 5):
-            one = self.data(column, Qt.ItemDataRole.UserRole)
-            two = other.data(column, Qt.ItemDataRole.UserRole)
+        if column in (2, 4, 5) and self.parent() is not None:
             try:
-                return int(one) < int(two)
+                return int(self.data(column, Qt.ItemDataRole.UserRole)) < int(
+                    other.data(column, Qt.ItemDataRole.UserRole))
             except (ValueError, TypeError):
                 pass
         return self.text(column).casefold() < other.text(column).casefold()
+
+
+class ModelFolderTree(QTreeWidget):
+    """Drag a *profile* onto a folder; never mutate items or GGUF on drop."""
+    modelDropped = Signal(str, str)
+
+    def dropEvent(self, event):
+        source = self.currentItem()
+        pos = event.position().toPoint()
+        target = self.itemAt(pos)
+        if source is None or source.parent() is None or target is None:
+            event.ignore()
+            return
+        folder_item = target if target.parent() is None else target.parent()
+        folder = folder_item.data(0, FOLDER_ROLE)
+        alias = source.data(0, Qt.ItemDataRole.UserRole)
+        if not isinstance(alias, str) or not isinstance(folder, str):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.modelDropped.emit(alias, folder)
+
+
+class ColumnFilterPopup(QDialog):
+    """Small anchored, searchable checkbox list for header-column filtering."""
+    def __init__(self, title, values, selected, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(T('Фильтр: ') + title)
+        self.setWindowFlags(Qt.WindowType.Popup)
+        self.setMinimumWidth(270)
+        self.sort_order = None
+        self.values = list(values)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.addWidget(QLabel(T('Фильтр: ') + title))
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(T('Найти значение…'))
+        layout.addWidget(self.search)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumHeight(90)
+        scroll.setMaximumHeight(245)
+        panel = QWidget()
+        inner = QVBoxLayout(panel)
+        inner.setSpacing(3)
+        self.checks = {}
+        for value in self.values:
+            checkbox = QCheckBox(str(value))
+            checkbox.setChecked(selected is None or value in selected)
+            inner.addWidget(checkbox)
+            self.checks[value] = checkbox
+        inner.addStretch(1)
+        scroll.setWidget(panel)
+        layout.addWidget(scroll)
+        self.search.textChanged.connect(self.search_values)
+        row = QHBoxLayout()
+        row.addWidget(btn(T('Все'), lambda: self.check_all(True), slim=True))
+        row.addWidget(btn(T('Ничего'), lambda: self.check_all(False), slim=True))
+        layout.addLayout(row)
+        row_sort = QHBoxLayout()
+        row_sort.addWidget(btn(T('↑ Сортировать'), lambda: self.choose_sort(Qt.SortOrder.AscendingOrder), slim=True))
+        row_sort.addWidget(btn(T('↓ Сортировать'), lambda: self.choose_sort(Qt.SortOrder.DescendingOrder), slim=True))
+        layout.addLayout(row_sort)
+        row_buttons = QHBoxLayout()
+        row_buttons.addWidget(btn(T('Сбросить'), self.clear_filter, slim=True))
+        row_buttons.addWidget(btn(T('Применить'), self.accept, primary=True, slim=True))
+        layout.addLayout(row_buttons)
+
+    def search_values(self, text):
+        query = text.strip().casefold()
+        for value, widget in self.checks.items():
+            widget.setVisible(query in value.casefold())
+
+    def check_all(self, checked):
+        for widget in self.checks.values():
+            if widget.isVisible():
+                widget.setChecked(checked)
+
+    def clear_filter(self):
+        for widget in self.checks.values():
+            widget.setChecked(True)
+        self.accept()
+
+    def choose_sort(self, order):
+        self.sort_order = order
+        self.accept()
+
+    def selected_values(self):
+        selected = {value for value, widget in self.checks.items() if widget.isChecked()}
+        return None if len(selected) == len(self.values) else selected
 
 
 class Window(QMainWindow):
@@ -821,17 +913,17 @@ class Window(QMainWindow):
         w = QScrollArea()
         w.setWidgetResizable(True)
         content = QWidget()
-        content.setMinimumHeight(565)
+        content.setMinimumHeight(610)
         l = QVBoxLayout(content)
         split = QSplitter(Qt.Orientation.Horizontal)
         l.addWidget(split, 1)
         w.setWidget(content)
         left_wrap = QWidget(); left_layout = QVBoxLayout(left_wrap)
         left_layout.setContentsMargins(0, 0, 0, 0); left_layout.setSpacing(6)
-        self.tree = QTreeWidget(); self.tree.setColumnCount(7)
+        self.tree = ModelFolderTree(); self.tree.setColumnCount(7)
         self.tree.setHeaderLabels([T('Модель'), T('Статус'), T('Контекст'), 'GPU', T('Порт'), 'PID', T('Назначение')])
-        self.tree.setRootIsDecorated(False)
-        self.tree.setToolTip(T('Щёлкни по заголовку столбца для сортировки по возрастанию/убыванию.'))
+        self.tree.setRootIsDecorated(True)
+        self.tree.setToolTip(T('Заголовок — фильтр и сортировка. ПКМ — действия. Перетащи модель на папку.'))
         self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree.setAllColumnsShowFocus(True)
@@ -853,57 +945,36 @@ class Window(QMainWindow):
         self.tree.itemDoubleClicked.connect(self.open_selected_in_editor)
         self.tree.currentItemChanged.connect(self.on_model_selected)
         self.tree.setUniformRowHeights(True)
-        self.tree.setMinimumHeight(215)
-        folder_row = QHBoxLayout()
-        folder_row.addWidget(QLabel(T('Папка:')))
-        self.folder_selector = QComboBox()
-        self.folder_selector.setMinimumWidth(145)
-        self.folder_selector.setToolTip(T('Виртуальные папки: GGUF остаются на своих местах'))
-        self.folder_selector.currentIndexChanged.connect(self.apply_model_filters)
-        folder_row.addWidget(self.folder_selector, 1)
-        folder_row.addWidget(slim_btn(T('＋ Папка'), self.create_model_folder))
-        folder_row.addWidget(slim_btn(T('↳ Переместить'), self.move_selected_model_folder))
-        left_layout.addLayout(folder_row)
-
-        folder_actions = QHBoxLayout()
-        folder_actions.addWidget(slim_btn(T('✎ Переименовать папку'), self.rename_model_folder))
-        folder_actions.addWidget(slim_btn(T('－ Удалить папку'), self.delete_model_folder))
-        folder_actions.addStretch()
-        left_layout.addLayout(folder_actions)
-
-        left_layout.addWidget(QLabel(T('Фильтры по столбцам (совмещаются):')))
-        self.model_filter_edits = []
-        filters_layout = QGridLayout()
-        filters_layout.setSpacing(5)
-        columns = [T('Модель'), T('Статус'), T('Контекст'), 'GPU',
-                   T('Порт'), 'PID', T('Назначение')]
-        for col, name in enumerate(columns):
-            field = QLineEdit()
-            field.setPlaceholderText(name + '…')
-            field.setClearButtonEnabled(True)
-            field.setToolTip(T(f'Поиск по столбцу: {name}'))
-            field.textChanged.connect(self.apply_model_filters)
-            self.model_filter_edits.append(field)
-            filters_layout.addWidget(field, col // 4, col % 4)
-        left_layout.addLayout(filters_layout)
-        self.visible_models_label = QLabel('')
-        self.visible_models_label.setObjectName('Subheader')
-        left_layout.addWidget(self.visible_models_label)
-        left_layout.addWidget(self.tree, 3)
-        actions = QHBoxLayout()
-        actions.setSpacing(6)
-        actions.addWidget(slim_btn(T('＋ Добавить'), self.add_model, primary=True))
-        actions.addWidget(slim_btn(T('⧉ Клонировать'), self.clone_selected_model))
-        actions.addWidget(slim_btn(T('－ Удалить'), self.delete_selected_model, danger=True))
-        actions.addWidget(slim_btn(T('✎ Изменить'), self.open_selected_in_editor))
-        actions.addWidget(slim_btn(T('🔎 Найти GGUF'), self.import_local_models))
-        actions.addStretch()
+        self.tree.setMinimumHeight(240)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.model_tree_context_menu)
+        self.tree.modelDropped.connect(self.on_model_folder_dropped)
+        self.tree.setDragEnabled(True)
+        self.tree.setAcceptDrops(True)
+        self.tree.viewport().setAcceptDrops(True)
+        self.tree.setDropIndicatorShown(True)
+        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.tree.header().sectionClicked.connect(self.open_model_column_filter)
+        self.column_filters = {}
+        self.column_sort = (0, Qt.SortOrder.AscendingOrder)
+        self.folder_expansion = {}
+        left_layout.addWidget(self.tree, 4)
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(5)
+        actions.setVerticalSpacing(5)
+        controls = [
+            (T('＋ Добавить'), self.add_model),
+            (T('⧉ Клонировать'), self.clone_selected_model),
+            (T('－ Удалить'), self.delete_selected_model),
+            (T('✎ Изменить'), self.open_selected_in_editor),
+            (T('🔎 Найти GGUF'), self.import_local_models),
+            (T('🛠 Профили'), self.maintain_model_profiles),
+        ]
+        for n, (title, handler) in enumerate(controls):
+            action = slim_btn(title, handler, primary=(n == 0), danger=(n == 2))
+            action.setMinimumWidth(0)
+            actions.addWidget(action, n // 3, n % 3)
         left_layout.addLayout(actions)
-        maintenance_row = QHBoxLayout()
-        maintenance_row.addWidget(slim_btn(T('🛠 Упорядочить профили'),
-                                           self.maintain_model_profiles))
-        maintenance_row.addStretch()
-        left_layout.addLayout(maintenance_row)
         self.status_label = QLabel(T('Статус: ожидание')); self.status_label.setObjectName('Subheader')
         self.status_label.setWordWrap(True); left_layout.addWidget(self.status_label)
         logs_group = QGroupBox(T('Живой журнал выбранной модели')); logs_layout = QVBoxLayout(logs_group)
@@ -964,9 +1035,9 @@ class Window(QMainWindow):
         self.column_timer = QTimer(self); self.column_timer.setSingleShot(True)
         self.column_timer.timeout.connect(self.persist_columns)
         self.populate_model_tree()
-        self.tree.setSortingEnabled(True)
-        self.tree.sortItems(0, Qt.SortOrder.AscendingOrder)
-        if self.tree.topLevelItemCount(): self.tree.setCurrentItem(self.tree.topLevelItem(0))
+        first = self.first_visible_model_item()
+        if first is not None:
+            self.tree.setCurrentItem(first)
         return w
 
     def defer_column_save(self, *args):
