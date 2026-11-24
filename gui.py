@@ -1148,46 +1148,57 @@ class Window(QMainWindow):
         self.update_model_status_cells()
 
     def update_model_status_cells(self):
-        palette = {
-            'running': (T('● Запущена'), '#63d6ac'),
-            'starting': (T('● Загрузка'), '#ffc578'),
-            'error': (T('● Ошибка'), '#e58f9b'),
-            'external': (T('● Порт занят'), '#ffc578'),
-            'port_conflict': (T('● Порт занят'), '#ffc578'),
-            'invalid_profile': (T('⚠ Исправить ID'), '#e58f9b'),
-            'stopped': (T('● Остановлена'), '#a1b4cf'),
-            'unstarted': (T('○ Не запущена'), '#91a4bc'),
-        }
-        states = multi.all_states()
-        for i in range(self.tree.topLevelItemCount()):
-            it = self.tree.topLevelItem(i)
-            alias = it.data(0, Qt.ItemDataRole.UserRole)
-            profile = self.profile_lookup(alias) or {}
-            state = states.get(alias, {})
-            status, color = palette.get(state.get('state', 'unstarted'), (T('○ Не запущена'), '#91a4bc'))
-            it.setText(1, status)
-            it.setForeground(1, QBrush(QColor(color)))
-            live = bool(state.get('managed') and state.get('alive'))
-            gpu = str(state.get('gpu') or profile.get('gpu') or T('авто'))
-            gpu_text = gpu if len(gpu) < 23 else gpu[:18] + '…'
-            it.setText(3, gpu_text)
-            it.setToolTip(3, T(f"GPU {'запущенного сервера' if live else 'в настройках'}: {gpu}"))
-            it.setText(4, str(state.get('port') if live else profile.get('port', 8080)))
-            it.setText(5, str(state.get('pid')) if live and state.get('pid') else '—')
-            if not live:
-                for column in (3, 4, 5):
-                    it.setForeground(column, QBrush(QColor('#8295b1')))
-            else:
-                for column in (3, 4, 5):
-                    it.setForeground(column, QBrush(QColor('#e9f0fb')))
-            it.setToolTip(4, T('Фактический порт процесса') if live else T('Порт, заданный в профиле'))
-            try:
-                port_num = int(state.get('port') if live else profile.get('port', 8080))
-            except (ValueError, TypeError):
-                port_num = -1
-            it.setData(4, Qt.ItemDataRole.UserRole, port_num)
-            it.setData(5, Qt.ItemDataRole.UserRole,
-                       int(state.get('pid') or 0) if live else -1)
+        # Qt can reorder rows while their sort-column text changes.
+        # Freeze sorting for the full refresh to avoid skipping other profiles.
+        was_sorting = self.tree.isSortingEnabled()
+        sort_column = self.tree.sortColumn()
+        sort_order = self.tree.header().sortIndicatorOrder()
+        self.tree.setSortingEnabled(False)
+        try:
+            palette = {
+                'running': (T('● Запущена'), '#63d6ac'),
+                'starting': (T('● Загрузка'), '#ffc578'),
+                'error': (T('● Ошибка'), '#e58f9b'),
+                'external': (T('● Порт занят'), '#ffc578'),
+                'port_conflict': (T('● Порт занят'), '#ffc578'),
+                'invalid_profile': (T('⚠ Исправить ID'), '#e58f9b'),
+                'stopped': (T('● Остановлена'), '#a1b4cf'),
+                'unstarted': (T('○ Не запущена'), '#91a4bc'),
+            }
+            states = multi.all_states()
+            for i in range(self.tree.topLevelItemCount()):
+                it = self.tree.topLevelItem(i)
+                alias = it.data(0, Qt.ItemDataRole.UserRole)
+                profile = self.profile_lookup(alias) or {}
+                state = states.get(alias, {})
+                status, color = palette.get(state.get('state', 'unstarted'), (T('○ Не запущена'), '#91a4bc'))
+                it.setText(1, status)
+                it.setForeground(1, QBrush(QColor(color)))
+                live = bool(state.get('managed') and state.get('alive'))
+                gpu = str(state.get('gpu') or profile.get('gpu') or T('авто'))
+                gpu_text = gpu if len(gpu) < 23 else gpu[:18] + '…'
+                it.setText(3, gpu_text)
+                it.setToolTip(3, T(f"GPU {'запущенного сервера' if live else 'в настройках'}: {gpu}"))
+                it.setText(4, str(state.get('port') if live else profile.get('port', 8080)))
+                it.setText(5, str(state.get('pid')) if live and state.get('pid') else '—')
+                if not live:
+                    for column in (3, 4, 5):
+                        it.setForeground(column, QBrush(QColor('#8295b1')))
+                else:
+                    for column in (3, 4, 5):
+                        it.setForeground(column, QBrush(QColor('#e9f0fb')))
+                it.setToolTip(4, T('Фактический порт процесса') if live else T('Порт, заданный в профиле'))
+                try:
+                    port_num = int(state.get('port') if live else profile.get('port', 8080))
+                except (ValueError, TypeError):
+                    port_num = -1
+                it.setData(4, Qt.ItemDataRole.UserRole, port_num)
+                it.setData(5, Qt.ItemDataRole.UserRole,
+                           int(state.get('pid') or 0) if live else -1)
+        finally:
+            self.tree.setSortingEnabled(was_sorting)
+            if was_sorting:
+                self.tree.sortItems(sort_column if sort_column >= 0 else 0, sort_order)
         self.apply_model_filters()
 
     def on_model_selected(self, *_):
