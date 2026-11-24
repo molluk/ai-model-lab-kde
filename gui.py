@@ -250,7 +250,11 @@ class ColumnFilterPopup(QDialog):
         inner.setSpacing(3)
         self.checks = {}
         for value in self.values:
-            checkbox = QCheckBox(str(value))
+            if title == '★':
+                caption = T('★ В избранном') if value == '★' else T('☆ Не в избранном')
+            else:
+                caption = str(value)
+            checkbox = QCheckBox(caption)
             checkbox.setChecked(selected is None or value in selected)
             inner.addWidget(checkbox)
             self.checks[value] = checkbox
