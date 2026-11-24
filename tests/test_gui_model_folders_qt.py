@@ -63,6 +63,8 @@ class QtModelFoldersTest(unittest.TestCase):
                     window.show()
                     app.processEvents()
                     self.assertEqual(window.tree.topLevelItemCount(), 2)
+                    self.assertEqual(window.tree.columnCount(), 8)
+                    self.assertEqual(window.tree.headerItem().text(0), '★')
                     self.assertEqual(len(list(window.iter_model_items())), 2)
                     self.assertFalse(hasattr(window, "folder_selector"))
                     self.assertFalse(hasattr(window, "model_filter_edits"))
@@ -94,7 +96,7 @@ class QtModelFoldersTest(unittest.TestCase):
                     self.assertIsNotNone(window.first_visible_model_item())
 
                     # Numerical sorting is per-folder, and both model rows remain.
-                    window.tree.sortItems(2, Qt.SortOrder.AscendingOrder)
+                    window.tree.sortItems(3, Qt.SortOrder.AscendingOrder)
                     self.assertEqual(len(list(window.iter_model_items())), 2)
                     # Exercise the actual filter popup's search and checked values.
                     popup = gui.ColumnFilterPopup(
@@ -108,10 +110,10 @@ class QtModelFoldersTest(unittest.TestCase):
                     self.assertEqual(popup.selected_values(), {"Qwen"})
                     popup.close()
 
-                    # Header-popup filtering, not seven permanent text fields.
+                    # Header-popup filtering on all eight columns (star included).
                     for col, value in enumerate(
-                            ["[Uncensored] Qwen3.8", "Не запущена", "32K", "авто",
-                             "8081", "—", "Эксперименты"]):
+                            ["", "[Uncensored] Qwen3.8", "Не запущена", "32K",
+                             "авто", "8081", "—", "Эксперименты"]):
                         values = {item.text(col) for item in window.iter_model_items()}
                         if value == "Не запущена":
                             match_value = next(v for v in values if "Не запущена" in v)
@@ -141,7 +143,28 @@ class QtModelFoldersTest(unittest.TestCase):
                                          if p["id"] == "blend")["favorite"])
                     blend_item = next(item for item in window.iter_model_items()
                                       if item.data(0, Qt.ItemDataRole.UserRole) == "blend")
-                    self.assertTrue(blend_item.text(0).startswith("★ "))
+                    self.assertEqual(blend_item.text(0), "★")
+                    self.assertEqual(blend_item.text(1), "Blend Q4")
+                    self.assertEqual(window.tree.topLevelItem(0).data(
+                        0, gui.FOLDER_ROLE), gui.FAVORITES_FOLDER)
+                    self.assertEqual(blend_item.parent(), window.tree.topLevelItem(0))
+                    self.assertEqual(len(list(window.iter_model_items())), 2)
+                    # Favorites are pinned on top for either sorting direction.
+                    for column in range(8):
+                        for order in (Qt.SortOrder.AscendingOrder,
+                                      Qt.SortOrder.DescendingOrder):
+                            window.tree.sortItems(column, order)
+                            self.assertEqual(
+                                window.tree.topLevelItem(0).data(0, gui.FOLDER_ROLE),
+                                gui.FAVORITES_FOLDER)
+                    # Unfavoriting returns Blend to its underlying Censored folder.
+                    window.toggle_model_favorite("blend")
+                    blend_item = next(item for item in window.iter_model_items()
+                                      if item.data(0, Qt.ItemDataRole.UserRole) == "blend")
+                    self.assertEqual(blend_item.text(0), "")
+                    self.assertEqual(blend_item.parent().data(0, gui.FOLDER_ROLE),
+                                     "Censored")
+                    window.toggle_model_favorite("blend")
 
                     # Create folder, drag/drop handler, rename, delete via context actions.
                     with mock.patch.object(gui.QInputDialog, "getText",
@@ -169,6 +192,29 @@ class QtModelFoldersTest(unittest.TestCase):
                     self.assertEqual(moved["folder"], "Проекты")
                     self.assertEqual(moved["context"], 32768)
                     self.assertEqual(moved["port"], 8081)
+
+                    # Drop onto Favorites marks the model, keeps its logical
+                    # 'Проекты' folder and does not create a second copy.
+                    source = next(item for item in window.iter_model_items()
+                                  if item.data(0, Qt.ItemDataRole.UserRole) == "qwen")
+                    window.tree.setCurrentItem(source)
+                    top_favs = window.tree.topLevelItem(0)
+                    self.assertEqual(top_favs.data(0, gui.FOLDER_ROLE),
+                                     gui.FAVORITES_FOLDER)
+                    window.tree.scrollToItem(top_favs)
+                    app.processEvents()
+                    drop_position = window.tree.visualItemRect(top_favs).center()
+                    favorite_event = QDropEvent(
+                        QPointF(drop_position), Qt.DropAction.MoveAction,
+                        QMimeData(), Qt.MouseButton.LeftButton,
+                        Qt.KeyboardModifier.NoModifier)
+                    window.tree.dropEvent(favorite_event)
+                    self.assertTrue(favorite_event.isAccepted())
+                    qwen_now = next(p for p in window.cfg["models"]
+                                    if p["id"] == "qwen")
+                    self.assertTrue(qwen_now["favorite"])
+                    self.assertEqual(qwen_now["folder"], "Проекты")
+                    self.assertEqual(len(list(window.iter_model_items())), 2)
 
                     with mock.patch.object(gui.QInputDialog, "getText",
                                            return_value=("Android проекты", True)):
