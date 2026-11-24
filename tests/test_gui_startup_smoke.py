@@ -62,12 +62,14 @@ class QtStartupSmokeTest(unittest.TestCase):
                  mock.patch.object(custom_services, "STATE_DIR", data / "custom_services"):
                 window = gui.Window()
                 try:
-                    self.assertEqual(window.tree.topLevelItemCount(), 2)
-                    aliases = [window.tree.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole)
-                               for i in range(window.tree.topLevelItemCount())]
+                    models = list(window.iter_model_items())
+                    self.assertEqual(len(models), 2)
+                    aliases = [item.data(0, Qt.ItemDataRole.UserRole)
+                               for item in models]
                     self.assertIn(bad, aliases)
-                    invalid_item = window.tree.topLevelItem(aliases.index(bad))
-                    self.assertIn("Исправить ID", invalid_item.text(1))
+                    invalid_item = models[aliases.index(bad)]
+                    self.assertIn("Исправить ID", invalid_item.text(2))
+                    self.assertIsNotNone(invalid_item.parent())
                     window.refresh_status()
                 finally:
                     window.exit_requested = True
