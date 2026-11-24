@@ -39,6 +39,8 @@ import multi
 import model_catalog
 import model_maintenance
 import model_folders
+import artifact_cleanup
+import offline_client
 import client_launcher
 import custom_services
 import shutdown_manager
@@ -1042,6 +1044,14 @@ class Window(QMainWindow):
         self.client_hint.setWordWrap(True)
         self.client_hint.setStyleSheet('color:#a1b4cf;font-size:11px;')
         f.addWidget(self.client_hint)
+        self.model_network_btn = slim_btn(T('🌐 Клиент: интернет разрешён'),
+                                          self.toggle_selected_client_network)
+        self.model_network_btn.setToolTip(T(
+            'Для новых запусков Pi/OpenCode через AI Model Lab. '
+            'Офлайн использует bubblewrap и Unix-мост к локальной модели. '
+            'Не ограничивает llama-server, уже открытые сессии, WebUI '
+            'и сторонние программы.'))
+        f.addWidget(self.model_network_btn)
         f.addWidget(btn(T('✎ Редактировать параметры'), self.open_selected_in_editor))
         for sid, caption, action in (
             ('webui', T('🌐 Открыть WebUI'), self.open_webui),
@@ -1420,6 +1430,7 @@ class Window(QMainWindow):
                 self.model_info.setPlainText(T('Выбери модель внутри папки.'))
             if hasattr(self, 'model_action_btn'):
                 self.model_action_btn.setEnabled(False)
+            self.refresh_client_network_button()
             return
         if hasattr(self, 'model_action_btn'):
             self.model_action_btn.setEnabled(True)
@@ -1437,6 +1448,57 @@ class Window(QMainWindow):
         self.reset_log_view()
         self.refresh_model_action_button()
         self.refresh_preferred_client_button()
+        self.refresh_client_network_button()
+
+    def refresh_client_network_button(self):
+        if not hasattr(self, 'model_network_btn'):
+            return
+        profile = self.selected_model_profile()
+        self.model_network_btn.setEnabled(bool(profile))
+        if not profile:
+            self.model_network_btn.setText(T('🌐 Клиент: модель не выбрана'))
+            return
+        disabled = offline_client.mode(profile) == 'offline'
+        self.model_network_btn.setText(
+            T('🔒 Клиент: интернет выключен') if disabled else
+            T('🌐 Клиент: интернет разрешён'))
+
+    def toggle_selected_client_network(self):
+        profile = self.selected_model_profile()
+        if not profile:
+            return
+        if self.editor_dirty and not self.confirm_discard_or_save():
+            return
+        disable = offline_client.mode(profile) == 'online'
+        if disable:
+            description = T(
+                'Новые сессии Pi/OpenCode для этой модели будут запускаться '
+                'в Linux network namespace (bubblewrap) без внешнего TCP/IP. '
+                'Локальный API будет доступен через Unix-сокет. '
+                'Если sandbox недоступен, запуск клиента отменяется.\n\n'
+                'Уже запущенные сессии, llama-server и сторонние программы '
+                'НЕ ограничиваются. Нужен установленный пакет bubblewrap.\n\n'
+                'Включить офлайн-режим клиента?')
+        else:
+            description = T('Разрешить новые сессии Pi/OpenCode с обычным '
+                            'сетевым доступом системы для выбранной модели?')
+        if QMessageBox.question(
+                self, T('Доступ к интернету клиента'), description,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            if core.config() != self.cfg:
+                raise RuntimeError(T('models.json изменился снаружи. Перезапусти приложение.'))
+            updated = json.loads(json.dumps(self.cfg))
+            p = next(p for p in updated['models'] if p['id'] == profile['id'])
+            p['client_network'] = 'offline' if disable else 'online'
+            backup = model_catalog.save_config(core.MODELS, updated)
+            self.cfg = updated
+            self.refresh_client_network_button()
+            self.set_message(T('Режим сети клиента сохранён. Backup: ') + str(backup))
+        except Exception as exc:
+            QMessageBox.warning(self, T('Настройки интернета клиента'), str(exc))
 
     def refresh_model_action_button(self):
         selected = self.selected_alias()
