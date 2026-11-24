@@ -139,6 +139,23 @@ class TestModelMaintenance(unittest.TestCase):
         self.assertNotEqual(plan["config"]["models"][0]["name"],
                             plan["config"]["models"][1]["name"])
 
+    def test_vision_projector_resolved_without_overwriting_model_weights(self):
+        model = self.add_model(self.censored, "Qwen3-VL-30B",
+                               "Qwen3-VL-30B-Q4_K_M.gguf")
+        projector = self.add_model(self.censored, "Qwen3-VL-30B",
+                                   "mmproj-Qwen3-VL-f16.gguf")
+        old = {"id": "qwen3-vl-30b", "name": "Qwen3-VL 30B",
+               "path": str(model), "mmproj": "replace-with-mmproj.gguf",
+               "purpose": "Изображения, интерфейсы, дизайн", "context": 32768}
+        plan = maintenance.plan_maintenance(
+            self.settings([old]), roots=[self.censored],
+            hardware={"uuid": None, "vram_gib": 22.0})
+        new = plan["config"]["models"][0]
+        self.assertEqual(new["mmproj"], str(projector.resolve()))
+        self.assertEqual(new["path"], str(model))
+        self.assertIn("UI", new["purpose"])
+        self.assertEqual(model.read_bytes()[:4], b"GGUF")
+
     def test_source_changed_only_after_explicit_backup_save(self):
         file = self.add_model(self.uncensored, "Huihui", "Qwen3.8-27B-Q4_K_M.gguf")
         profile = {"id": "huihui", "name": "[Uncensored] Huihui Qwen3.8",
