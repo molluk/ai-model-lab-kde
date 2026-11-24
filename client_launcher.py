@@ -18,6 +18,7 @@ import sys
 import core
 import multi
 import pi_bridge_manager
+import offline_client
 
 CLIENTS = ('opencode', 'pi')
 
@@ -183,6 +184,18 @@ def execute(client, alias):
     print(f"Модель: {alias} | API: {info['url']} | контекст: {info['context']}", flush=True)
     print(f'Рабочий каталог: {workspace}', flush=True)
     print('Важно: доступ к файловой системе и инструментам контролируется самим клиентом.', flush=True)
+    profile = multi.profile_by_id(alias) or {}
+    if offline_client.mode(profile) == 'offline':
+        # No silent fallback: missing bwrap or failed namespace setup must
+        # leave Pi/OpenCode unlaunched rather than leaking network access.
+        print('🔒 Сеть клиента: ОФЛАЙН. Интернет в новом сетевом пространстве '
+              'отсутствует; локальный API доступен через Unix bridge.', flush=True)
+        print('Это ограничение не относится к отдельным запущенным сессиям, '
+              'самому llama-server, D-Bus или другому ПО пользователя.', flush=True)
+        return offline_client.run_isolated(
+            args=argv, env=env, port=info['port'], workspace=workspace,
+            app_data=core.DATA)
+    print('🌐 Сеть клиента: обычный доступ системы.', flush=True)
     os.chdir(workspace)
     os.execvpe(argv[0], argv, env)
 
@@ -193,7 +206,7 @@ def main():
     parser.add_argument('--model', required=True)
     args = parser.parse_args()
     try:
-        execute(args.client, args.model)
+        return execute(args.client, args.model) or 0
     except Exception as exc:
         print(f'ОШИБКА: {exc}', file=sys.stderr, flush=True)
         try:
