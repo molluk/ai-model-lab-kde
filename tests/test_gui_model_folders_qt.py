@@ -18,7 +18,8 @@ sys.path.insert(0, str(ROOT))
 class QtModelFoldersTest(unittest.TestCase):
     def test_tree_favorites_header_filter_and_folder_crud(self):
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
-        from PySide6.QtCore import Qt
+        from PySide6.QtCore import Qt, QRect, QPoint, QPointF, QMimeData
+        from PySide6.QtGui import QDropEvent
         from PySide6.QtWidgets import QApplication, QMessageBox, QDialog, QPushButton
         import core
         import custom_services
@@ -66,6 +67,28 @@ class QtModelFoldersTest(unittest.TestCase):
                     self.assertFalse(hasattr(window, "folder_selector"))
                     self.assertFalse(hasattr(window, "model_filter_edits"))
                     self.assertTrue(window.tree.rootIsDecorated())
+
+                    # At the smallest supported window, buttons must not overlap
+                    # the model tree or each other (previous screenshot regression).
+                    window.resize(980, 680)
+                    app.processEvents()
+                    tree_rect = QRect(window.tree.mapToGlobal(QPoint(0, 0)),
+                                      window.tree.size())
+                    actions = [button for button in window.findChildren(QPushButton)
+                               if button.text() in ('＋ Добавить', '⧉ Клонировать',
+                                                    '－ Удалить', '✎ Изменить',
+                                                    '🔎 Найти GGUF', '🛠 Профили')]
+                    self.assertEqual(len(actions), 6)
+                    areas = [QRect(button.mapToGlobal(QPoint(0, 0)), button.size())
+                             for button in actions]
+                    for area in areas:
+                        self.assertFalse(area.intersects(tree_rect),
+                                         'Model toolbar overlaps the list')
+                    for idx, rect in enumerate(areas):
+                        for another in areas[idx + 1:]:
+                            self.assertFalse(rect.intersects(another),
+                                             'Model toolbar buttons overlap')
+
                     self.assertIn("Censored", model_folders.list_folders(window.cfg))
                     self.assertIn("Uncensored", model_folders.list_folders(window.cfg))
                     self.assertIsNotNone(window.first_visible_model_item())
@@ -113,7 +136,23 @@ class QtModelFoldersTest(unittest.TestCase):
                                            return_value=("Проекты", True)):
                         window.create_model_folder()
                     self.assertIn("Проекты", model_folders.list_folders(window.cfg))
-                    window.on_model_folder_dropped("qwen", "Проекты")
+                    # Exercise real tree.dropEvent using a synthetic Qt drop.
+                    source = next(item for item in window.iter_model_items()
+                                  if item.data(0, Qt.ItemDataRole.UserRole) == "qwen")
+                    window.tree.setCurrentItem(source)
+                    target_root = next(window.tree.topLevelItem(i)
+                                       for i in range(window.tree.topLevelItemCount())
+                                       if window.tree.topLevelItem(i).data(
+                                           0, gui.FOLDER_ROLE) == "Проекты")
+                    window.tree.scrollToItem(target_root)
+                    app.processEvents()
+                    drop_position = window.tree.visualItemRect(target_root).center()
+                    drop_event = QDropEvent(
+                        QPointF(drop_position), Qt.DropAction.MoveAction,
+                        QMimeData(), Qt.MouseButton.LeftButton,
+                        Qt.KeyboardModifier.NoModifier)
+                    window.tree.dropEvent(drop_event)
+                    self.assertTrue(drop_event.isAccepted())
                     moved = next(p for p in window.cfg["models"] if p["id"] == "qwen")
                     self.assertEqual(moved["folder"], "Проекты")
                     self.assertEqual(moved["context"], 32768)
