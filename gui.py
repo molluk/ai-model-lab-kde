@@ -1364,7 +1364,14 @@ class Window(QMainWindow):
 
     def on_model_selected(self, *_):
         p = self.selected_model_profile()
-        if not p: return
+        if not p:
+            if hasattr(self, 'model_info'):
+                self.model_info.setPlainText(T('Выбери модель внутри папки.'))
+            if hasattr(self, 'model_action_btn'):
+                self.model_action_btn.setEnabled(False)
+            return
+        if hasattr(self, 'model_action_btn'):
+            self.model_action_btn.setEnabled(True)
         try: path = str(core.resolve_gguf(p)); presence = T('✓ GGUF найден')
         except Exception as exc: path = str(exc); presence = T('⚠ Проверить GGUF')
         state = multi.inspect(p['id'])
@@ -1382,7 +1389,10 @@ class Window(QMainWindow):
 
     def refresh_model_action_button(self):
         selected = self.selected_alias()
-        if not selected: return
+        if not selected:
+            self.model_action_btn.setEnabled(False)
+            return
+        self.model_action_btn.setEnabled(True)
         state = multi.inspect(selected)
         status = state.get('state')
         if self.model_action_busy:
@@ -2570,11 +2580,20 @@ class Window(QMainWindow):
         if QMessageBox.question(self,T('Удаление'),T(f'Удалить профиль {alias}? GGUF-файл останется на диске.'))==QMessageBox.StandardButton.Yes:
             actual_delete()
 
-    def select_tree_alias(self,tree,alias):
+    def select_tree_alias(self, tree, alias):
         for i in range(tree.topLevelItemCount()):
-            item=tree.topLevelItem(i)
-            if item.data(0,Qt.ItemDataRole.UserRole)==alias:
-                tree.setCurrentItem(item);tree.scrollToItem(item);return
+            root = tree.topLevelItem(i)
+            if root.data(0, Qt.ItemDataRole.UserRole) == alias:
+                tree.setCurrentItem(root)
+                tree.scrollToItem(root)
+                return
+            for j in range(root.childCount()):
+                child = root.child(j)
+                if child.data(0, Qt.ItemDataRole.UserRole) == alias:
+                    root.setExpanded(True)
+                    tree.setCurrentItem(child)
+                    tree.scrollToItem(child)
+                    return
 
     def select_alias_in_trees(self,alias):
         self.select_tree_alias(self.tree,alias)
