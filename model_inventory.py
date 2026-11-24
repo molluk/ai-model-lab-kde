@@ -30,10 +30,13 @@ def scan_weights(base: Path) -> dict:
     all_weights = []
     inaccessible = []
     symlinks = []
-    roots = [base / "Censored", base / "Uncensored"]
-    for root in roots:
+    roots = [(base, "AI root", True),
+             (base / "Censored", "Censored", False),
+             (base / "Uncensored", "Uncensored", False)]
+    for root, label, shallow in roots:
         if not root.is_dir():
-            inaccessible.append(str(root))
+            if not shallow:
+                inaccessible.append(str(root))
             continue
         def onerror(error):
             inaccessible.append(str(getattr(error, "filename", root)) + ": " + str(error))
@@ -45,7 +48,7 @@ def scan_weights(base: Path) -> dict:
                     symlinks.append(str(child))
                 elif name not in IGNORED_DIRS:
                     retained.append(name)
-            folders[:] = retained
+            folders[:] = [] if shallow else retained
             for filename in sorted(files):
                 path = Path(current) / filename
                 if path.suffix.lower() not in WEIGHT_EXTENSIONS:
@@ -68,7 +71,7 @@ def scan_weights(base: Path) -> dict:
                     "path": str(path.absolute()),
                     "file": path.name,
                     "directory": str(path.parent),
-                    "root": root.name,
+                    "root": label,
                     "bytes": size,
                     "extension": path.suffix.lower(),
                     "kind": ("projector" if model_catalog._is_projector(path.name)
@@ -114,8 +117,14 @@ def analyze_profiles(config: dict, inventory: dict) -> dict:
                       config.get("model_root") or str(DEFAULT_ROOT / "Censored")).expanduser()
     referenced = defaultdict(list)
     profile_rows = []
-    physical_paths = {path for path, info in inventory["by_path"].items()
-                      if info["extension"] == ".gguf" and info["kind"] == "model"}
+    # Treat a split GGUF as one logical model. Parts 00002+ are needed
+    # for loading but should not be suggested as standalone profiles.
+    physical_paths = {
+        path for path, info in inventory["by_path"].items()
+        if info["extension"] == ".gguf" and info["kind"] == "model"
+        and (not SPLIT.search(info["file"]) or
+             int(SPLIT.search(info["file"]).group(1)) == 1)
+    }
     inventory_files = inventory["by_path"]
     for p in profiles:
         alias = str(p.get("id", ""))
@@ -223,7 +232,8 @@ def render_report(report: dict) -> str:
         "GGUF-моделей / частей: " + str(sum(
             row["kind"] == "model" and row["extension"] == ".gguf"
             for row in weights)),
-        "Censored: " + str(grouped["Censored"]) +
+        "AI root: " + str(grouped["AI root"]) +
+        " · Censored: " + str(grouped["Censored"]) +
         " · Uncensored: " + str(grouped["Uncensored"]),
         "safetensors-файлов: " + str(sum(
             row["extension"] == ".safetensors" for row in weights)),
