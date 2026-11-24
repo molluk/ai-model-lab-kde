@@ -15,6 +15,7 @@ import re
 import subprocess
 
 import model_catalog
+import multi
 
 VRAM_GIB_FALLBACK = 22.0
 LEGACY_PURPOSES = {
@@ -216,6 +217,21 @@ def plan_maintenance(config, *, roots=None, hardware=None):
     hw = hardware if hardware is not None else hardware_info()
     updated = copy.deepcopy(config)
     suggestions, changes, warnings, statuses = [], [], [], []
+    # Repair legacy IDs produced by the old (88-char) importer. Do it in the
+    # preview only; applying still needs an explicit confirmation and backup.
+    # Reserve every original ID to avoid collisions with existing profiles.
+    used_aliases = {str(p.get("id", "")) for p in updated["models"]}
+    id_repairs = {}
+    for profile in updated["models"]:
+        old_id = profile.get("id")
+        try:
+            multi.validate_alias(old_id)
+        except (ValueError, TypeError):
+            new_id = model_catalog._unique_alias(
+                str(old_id or profile.get("name") or "model"), used_aliases)
+            id_repairs[new_id] = copy.deepcopy(profile)
+            profile["id"] = new_id
+            warnings.append(f"ID профиля {old_id!r} будет заменён на {new_id!r}")
     owner = {}
     kept = []
     if hw.get("warning"):
@@ -265,6 +281,19 @@ def plan_maintenance(config, *, roots=None, hardware=None):
 
     # Duplicates and missing profiles remain until explicitly approved for removal.
     updated["models"] = kept
+    # Present every alias repair as a single before/after edit, including
+    # profiles with unmounted/missing GGUF which are otherwise left untouched.
+    for alias, original in id_repairs.items():
+        final = next((p for p in kept if p.get("id") == alias), None)
+        if final is None:
+            continue
+        prior_change = next((x for x in changes if x.get("id") == alias), None)
+        if prior_change is not None:
+            prior_change["before"] = original
+            prior_change["id"] = str(original.get("id"))
+        else:
+            changes.append({"id": str(original.get("id")),
+                            "before": original, "after": copy.deepcopy(final)})
     return {"config": updated, "changes": changes, "suggested": suggestions,
             "warnings": warnings, "statuses": statuses,
             "found_files": len(files), "hardware": hw}
